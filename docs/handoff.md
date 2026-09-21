@@ -27,13 +27,9 @@ and screenshotted into the README). Nothing blocks it.
 
 Nothing is half written. Two loose ends, both decisions rather than code:
 
-1. **`CLAUDE.md` line 18 contradicts the README.** It still mandates the sentence
-   "a subprocess with a timeout and no network inside the worker container" and says
-   "The README says exactly that". That sentence is false: the worker container has a
-   network, because it calls the model and Postgres. The README and `docs/design.md`
-   were corrected to describe what the sandbox actually does. Thomas was told and has
-   not yet decided whether to change `CLAUDE.md`. Do not "fix" the README back to
-   match it without asking.
+1. **The sandbox wording is settled.** `CLAUDE.md` used to mandate "no network
+   inside the worker container", which was false, and the other session corrected it
+   in `d1a56ac` to match the README. No action needed, recorded so nobody reopens it.
 
 2. **Tracing is configured but traces nothing.** Verified against the live
    deployment on 2026-09-21. The exporter works and reaches Azure Monitor, but the
