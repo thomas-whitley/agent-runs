@@ -72,24 +72,70 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-var sharedSecrets = [
-  {
-    name: 'database-url'
-    value: databaseUrl
-  }
-  {
-    name: 'model-api-key'
-    value: modelApiKey
-  }
-  {
-    name: 'voyage-api-key'
-    value: voyageApiKey
-  }
-  {
-    name: 'insights-connection-string'
-    value: insights.properties.ConnectionString
-  }
-]
+// Container Apps rejects a secret whose value is empty, so an unset key has to
+// be left out of the array rather than passed through as ''.
+var optionalSecrets = concat(
+  empty(modelApiKey)
+    ? []
+    : [
+        {
+          name: 'model-api-key'
+          value: modelApiKey
+        }
+      ],
+  empty(voyageApiKey)
+    ? []
+    : [
+        {
+          name: 'voyage-api-key'
+          value: voyageApiKey
+        }
+      ]
+)
+
+var sharedSecrets = concat(
+  [
+    {
+      name: 'database-url'
+      value: databaseUrl
+    }
+    {
+      name: 'insights-connection-string'
+      value: insights.properties.ConnectionString
+    }
+  ],
+  optionalSecrets
+)
+
+// An env var referring to a secret that was left out fails the same way.
+var modelEnvironment = concat(
+  [
+    {
+      name: 'MODEL'
+      value: model
+    }
+    {
+      name: 'MODEL_BASE_URL'
+      value: modelBaseUrl
+    }
+  ],
+  empty(modelApiKey)
+    ? []
+    : [
+        {
+          name: 'MODEL_API_KEY'
+          secretRef: 'model-api-key'
+        }
+      ],
+  empty(voyageApiKey)
+    ? []
+    : [
+        {
+          name: 'VOYAGE_API_KEY'
+          secretRef: 'voyage-api-key'
+        }
+      ]
+)
 
 var sharedEnvironment = [
   {
@@ -176,23 +222,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ROLE'
               value: 'worker'
             }
-            {
-              name: 'MODEL'
-              value: model
-            }
-            {
-              name: 'MODEL_BASE_URL'
-              value: modelBaseUrl
-            }
-            {
-              name: 'MODEL_API_KEY'
-              secretRef: 'model-api-key'
-            }
-            {
-              name: 'VOYAGE_API_KEY'
-              secretRef: 'voyage-api-key'
-            }
-          ])
+          ], modelEnvironment)
         }
       ]
       scale: {
