@@ -61,6 +61,7 @@ services:
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MAX_RUNS_PER_DAY: ${MAX_RUNS_PER_DAY:-20}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       POLL_SECONDS: "0.5"
     depends_on:
       db:

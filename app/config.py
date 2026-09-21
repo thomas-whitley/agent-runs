@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 DEFAULT_DATABASE_URL = "postgresql://agent:agent@localhost:5432/agent_runs"
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_EMBEDDING_MODEL = "voyage-3"
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,8 @@ class Settings:
     verify_timeout_seconds: float
     lease_seconds: float
     replica_id: str
+    voyage_api_key: str | None
+    embedding_model: str
 
 
 def _default_worker_id() -> str:
@@ -45,4 +48,6 @@ def load_settings() -> Settings:
         verify_timeout_seconds=float(os.environ.get("VERIFY_TIMEOUT_SECONDS", "10")),
         lease_seconds=float(os.environ.get("LEASE_SECONDS", "60")),
         replica_id=os.environ.get("REPLICA_ID") or socket.gethostname(),
+        voyage_api_key=os.environ.get("VOYAGE_API_KEY") or None,
+        embedding_model=os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
     )

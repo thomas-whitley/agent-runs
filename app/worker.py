@@ -6,9 +6,11 @@ import time
 import psycopg
 
 from app.config import Settings, load_settings
+from app.corpus import load_corpus
 from app.loop import LoopResult, run_agent_loop
 from app.migrations import apply_migrations
 from app.model import Model, StubModel
+from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, heartbeat, record_step
 
 logger = logging.getLogger("agent_runs.worker")
@@ -56,7 +58,11 @@ def refuse_run(conn: psycopg.Connection, run_id: str, reason: str) -> None:
 
 
 def process_run(
-    conn: psycopg.Connection, run_id: str, model: Model, settings: Settings
+    conn: psycopg.Connection,
+    run_id: str,
+    model: Model,
+    settings: Settings,
+    retriever: Retriever | None = None,
 ) -> LoopResult | None:
     """Execute one claimed run. None means the daily guard refused it."""
     if runs_started_today(conn) > settings.max_runs_per_day:
@@ -73,6 +79,7 @@ def process_run(
         token_budget=settings.token_budget,
         verify_timeout_seconds=settings.verify_timeout_seconds,
         on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
+        retriever=retriever,
     )
 
 
@@ -106,10 +113,19 @@ def main() -> None:  # pragma: no cover - the process entry point
     settings = load_settings()
     apply_migrations(settings.database_url)
     model = build_model(settings)
+    retriever = build_retriever(settings)
 
-    logger.info("worker %s started on model %s", settings.worker_id, settings.model)
+    logger.info(
+        "worker %s started on model %s, retrieval by %s",
+        settings.worker_id,
+        settings.model,
+        retriever.name,
+    )
 
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        added = index_corpus(conn, load_corpus(), embedder=retriever.embedder)
+        logger.info("corpus indexed, %s new chunks", added)
+
         while True:
             try:
                 run_id = claim_next_run(conn, settings.worker_id, settings.lease_seconds)
@@ -117,7 +133,7 @@ def main() -> None:  # pragma: no cover - the process entry point
                     time.sleep(settings.poll_seconds)
                     continue
                 logger.info("claimed run %s", run_id)
-                process_run(conn, run_id, model, settings)
+                process_run(conn, run_id, model, settings, retriever)
             except Exception:
                 # run_agent_loop already closes a run it could not finish. This
                 # catches everything outside it, so the worker outlives a blip.

@@ -13,7 +13,9 @@ curl http://localhost:8000/health
 
 That prints `{"status":"ok"}`. The same image serves both roles, chosen by the `ROLE` environment variable, which is `api` or `worker`. The worker arrives at task 3.
 
-The tests need a Postgres to work against. They use `TEST_DATABASE_URL`, not `DATABASE_URL`, because they drop and recreate the public schema and `DATABASE_URL` points at a real project in a local `.env`. The default is the compose database, and a non local host is refused unless you set `ALLOW_REMOTE_TEST_DB`.
+The tests need a Postgres to work against. They use `TEST_DATABASE_URL`, not `DATABASE_URL`, because they drop and recreate the public schema and `DATABASE_URL` points at a real project in a local `.env`. A non local host is refused unless you set `ALLOW_REMOTE_TEST_DB`.
+
+The default is `agent_runs_test` on the compose Postgres, which the fixtures create, and deliberately not the `agent_runs` database the stack itself uses. A running worker polls that one, and it will claim a run a test has just created and write its own steps into it. The tests pass with the stack up because of that separation, not by luck.
 
 ```
 docker compose up -d db --wait
@@ -29,7 +31,7 @@ uv run pytest
 | A client that drops mid run reconnects with `Last-Event-ID` and receives the remaining steps exactly once | `tests/test_resume.py` | green |
 | Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | green |
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
-| Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | pending |
+| Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | green, by full text search |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC, traced end to end | `.github/workflows/deploy.yml` | pending |
 
 ## Resume, and the test that proves it
@@ -182,6 +184,59 @@ tests/test_sandbox.py::test_the_sandbox_cannot_open_a_socket PASSED      [100%]
 
 ============================== 9 passed in 4.83s ===============================
 ```
+
+## Retrieval
+
+The corpus is 35 chunks of Python standard library notes in `corpus/`, indexed
+into the `chunks` table when the worker starts. Indexing is keyed on
+`(source, ord)`, so restarting the worker adds nothing.
+
+There are two retrieval paths behind one interface. With `VOYAGE_API_KEY` set,
+chunks carry embeddings and the search is cosine distance in pgvector. Without
+it, the search is Postgres full text search over the same rows. This README says
+retrieval, not vector, because the numbers below came from the full text path.
+The vector path is tested against real pgvector with a deterministic offline
+embedder, so the SQL is proven even without a key.
+
+Asking for the chunk behind a regular expression task returns this:
+
+```
+python_stdlib  ->  re.split(pattern, string) splits on a pattern rather than a fixed separator...
+python_stdlib  ->  unittest.mock is rarely the answer in tests. Prefer passing a real object...
+python_stdlib  ->  re.findall(pattern, string) returns every non overlapping match as a list...
+```
+
+```
+tests/test_retrieval.py::test_indexing_the_corpus_stores_every_chunk PASSED [  6%]
+tests/test_retrieval.py::test_indexing_twice_adds_nothing PASSED         [ 13%]
+tests/test_retrieval.py::test_full_text_search_returns_the_chunk_that_matches PASSED [ 20%]
+tests/test_retrieval.py::test_full_text_search_ranks_the_best_chunk_first PASSED [ 26%]
+tests/test_retrieval.py::test_full_text_search_returns_nothing_for_an_unrelated_query PASSED [ 33%]
+tests/test_retrieval.py::test_vector_search_returns_the_nearest_chunk PASSED [ 40%]
+tests/test_retrieval.py::test_vector_search_stores_an_embedding_for_every_chunk PASSED [ 46%]
+tests/test_retrieval.py::test_text_search_needs_no_embeddings PASSED     [ 53%]
+tests/test_retrieval.py::test_without_an_embedding_key_retrieval_is_full_text_search PASSED [ 60%]
+tests/test_retrieval.py::test_with_an_embedding_key_retrieval_is_vector_distance PASSED [ 66%]
+
+============================== 15 passed in 3.37s ==============================
+```
+
+Two things about the corpus are worth saying plainly. Postgres full text search
+joins every term of a query with AND by default, which means a chunk only matches
+when it contains all of them, and a pytest file never does. The query is rewritten
+to match any term and rank the result. Second, the repo's own README and design
+docs were in the corpus first, as the spec asked. They crowded the standard
+library notes out, because they are full of the same words a pytest file uses
+while saying nothing about how to write Python. The corpus is reference material
+only now, and the spec records why.
+
+## A note on free tier quotas
+
+`MAX_RUNS_PER_DAY` caps runs, not model calls, and one run makes up to ten calls
+while it retries. Gemini's free tier allows 20 calls a day on `gemini-3.8-flash`,
+so a handful of failing runs exhausts it. When that happens the run is closed
+with `status: error` rather than hanging, which is what the error path is for.
+`gemini-3.5-flash-lite` has a larger free allowance.
 
 ## Guards
 

@@ -31,6 +31,8 @@ def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
         verify_timeout_seconds=10.0,
         lease_seconds=60.0,
         replica_id="replica-test",
+        voyage_api_key=None,
+        embedding_model="voyage-3",
     )
     return Settings(**{**defaults, **overrides})
 
@@ -160,3 +162,41 @@ def test_processing_a_run_refreshes_its_heartbeat(migrated_db):
         "SELECT extract(epoch from (now() - heartbeat_at)) FROM runs WHERE id = %s", (run_id,)
     ).fetchone()[0]
     assert age < 60, "the worker must report progress while it runs"
+
+
+def test_process_run_gives_the_loop_its_retriever(migrated_db):
+    from app.retrieval import CorpusChunk, TextRetriever, index_corpus
+
+    index_corpus(
+        migrated_db,
+        [CorpusChunk(source="notes", ord=0, body="Use solution to add two integers together.")],
+    )
+    run_id = new_run(migrated_db)
+    claim_next_run(migrated_db, "worker-test", lease_seconds=60)
+
+    process_run(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        settings_with(),
+        retriever=TextRetriever(),
+    )
+
+    output = migrated_db.execute(
+        "SELECT output FROM steps WHERE run_id = %s AND kind = 'retrieve'", (run_id,)
+    ).fetchone()[0]
+    assert output["chunks"], "the retriever never reached the loop"
+
+
+def test_a_text_retriever_needs_no_embedder():
+    from app.retrieval import TextRetriever
+
+    assert TextRetriever().embedder is None
+
+
+def test_a_vector_retriever_exposes_its_embedder():
+    from app.retrieval import VectorRetriever, VoyageEmbedder
+
+    embedder = VoyageEmbedder("not-a-real-key")
+
+    assert VectorRetriever(embedder).embedder is embedder

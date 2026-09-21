@@ -6,7 +6,10 @@ import pytest
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "db"}
 
-DEFAULT_TEST_DATABASE_URL = "postgresql://agent:agent@localhost:5432/agent_runs"
+# Deliberately not the database the compose stack uses. A running worker polls
+# that one, and it will claim a run a test just created and interleave its own
+# steps into it.
+DEFAULT_TEST_DATABASE_URL = "postgresql://agent:agent@localhost:5432/agent_runs_test"
 
 
 def _test_database_url() -> str:
@@ -26,10 +29,23 @@ def _test_database_url() -> str:
     return url
 
 
+def _create_database_if_missing(url: str) -> None:
+    """Create the test database, connecting to the server's default one to do it."""
+    parts = urlsplit(url)
+    name = parts.path.lstrip("/")
+    maintenance = url.replace(f"/{name}", "/postgres")
+
+    with psycopg.connect(maintenance, autocommit=True, connect_timeout=5) as conn:
+        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+        if not exists:
+            conn.execute(f'CREATE DATABASE "{name}"')
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     url = _test_database_url()
     try:
+        _create_database_if_missing(url)
         with psycopg.connect(url, connect_timeout=5):
             pass
     except psycopg.OperationalError as exc:

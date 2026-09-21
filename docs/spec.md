@@ -148,3 +148,31 @@ Google AI Studio. Current model ids at the time of writing include
 
 The README names whichever model produced the numbers it reports. It does not
 claim Claude when the trace came from something else.
+
+## Decision, 2026-09-21 evening: the corpus is reference material only
+
+The spec asked for the repo's own docs plus standard library snippets, so that
+retrieval changes the agent's output on the pytest task. Both were indexed and
+the repo docs won every query. A pytest file is full of words like test, assert
+and pattern, and so is a README that documents a testing project, so the README
+chunks outranked the standard library notes while telling the agent nothing about
+how to write Python. Measured on a regular expression task, the top three chunks
+were all README.
+
+The corpus is now `corpus/` alone, which is curated reference material. The same
+query then returns `re.split`, which is the chunk that helps. The purpose clause
+in the original decision is the reason for the change, not a departure from it.
+
+Retrieval is full text search until there is a Voyage key. The vector path is
+implemented and tested against real pgvector using a deterministic offline
+embedder, so only the embedding provider is unproven. The README says retrieval
+rather than vector while that is true.
+
+## Note, 2026-09-21 evening: MAX_RUNS_PER_DAY does not cap model calls
+
+The guard counts runs, and a run makes up to ten model calls as it retries. On
+the Gemini free tier, which allows 20 calls a day on `gemini-3.8-flash`, a few
+failing runs exhaust the quota. The failure is handled, the run closes with
+status error rather than hanging, but the guard should not be described as a
+protection against a provider quota. A per day call budget would be the honest
+fix and is not built.

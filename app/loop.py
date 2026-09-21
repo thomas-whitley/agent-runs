@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import psycopg
 
 from app.model import Model, ModelReply, extract_code
+from app.retrieval import DEFAULT_LIMIT, Retriever
 from app.runs import record_step
 from app.sandbox import DEFAULT_TIMEOUT_SECONDS, verify
 
@@ -36,8 +37,18 @@ class LoopResult:
     tokens_used: int
 
 
-def _first_prompt(test_code: str) -> str:
-    return f"Write solution.py so that this pytest file passes.\n\n```python\n{test_code}\n```"
+def _context_block(chunks: list) -> str:
+    if not chunks:
+        return ""
+    notes = "\n\n".join(f"{chunk.source}: {chunk.body}" for chunk in chunks)
+    return f"These notes may help.\n\n{notes}\n\n"
+
+
+def _first_prompt(test_code: str, context: str = "") -> str:
+    return (
+        f"{context}Write solution.py so that this pytest file passes."
+        f"\n\n```python\n{test_code}\n```"
+    )
 
 
 def _retry_prompt(test_code: str, code: str, failure: str) -> str:
@@ -91,6 +102,7 @@ def run_agent_loop(
     model_retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
     model_retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
     on_step: Callable[[], None] | None = None,
+    retriever: Retriever | None = None,
 ) -> LoopResult:
     test_code, tokens_used = conn.execute(
         "SELECT task, tokens_used FROM runs WHERE id = %s", (run_id,)
@@ -108,6 +120,10 @@ def run_agent_loop(
         if on_step is not None:
             on_step()
 
+    # Retrieval runs on a resume too, so the replacement worker prompts with the
+    # same notes. Only the step record is skipped, because it already exists.
+    chunks = retriever.search(conn, test_code, limit=DEFAULT_LIMIT) if retriever else []
+
     if seq == 0:
         seq += 1
         record_step(
@@ -116,12 +132,18 @@ def run_agent_loop(
         progress()
 
         seq += 1
-        record_step(conn, run_id, seq, "retrieve", output={"chunks": []})
+        record_step(
+            conn,
+            run_id,
+            seq,
+            "retrieve",
+            output={"chunks": [{"id": chunk.id, "source": chunk.source} for chunk in chunks]},
+        )
         progress()
 
     status = "budget_exhausted"
     error_message: str | None = None
-    prompt = _first_prompt(test_code)
+    prompt = _first_prompt(test_code, _context_block(chunks))
 
     try:
         while attempts < max_attempts:

@@ -25,7 +25,8 @@ jobs:
           --health-retries 30
 
     env:
-      TEST_DATABASE_URL: postgresql://agent:agent@localhost:5432/agent_runs
+      # Its own database, created by the fixtures. Never the one a worker polls.
+      TEST_DATABASE_URL: postgresql://agent:agent@localhost:5432/agent_runs_test
 
     steps:
       - uses: actions/checkout@v5

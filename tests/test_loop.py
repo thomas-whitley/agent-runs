@@ -218,3 +218,61 @@ def test_the_loop_reports_progress_so_its_claim_stays_alive(migrated_db):
     )
 
     assert len(beats) >= 3, "the loop must report progress as it goes"
+
+
+RETRIEVAL_CORPUS = [
+    "The solution module should add two integers and return their sum.",
+    "The datetime module supplies classes for manipulating dates and times.",
+    "The heapq module turns a list into a min heap in place.",
+]
+
+
+def index_test_corpus(conn):
+    from app.retrieval import CorpusChunk, index_corpus
+
+    index_corpus(
+        conn,
+        [CorpusChunk(source="notes", ord=i, body=b) for i, b in enumerate(RETRIEVAL_CORPUS)],
+    )
+
+
+def test_the_retrieve_step_records_the_chunks_it_found(migrated_db):
+    from app.retrieval import TextRetriever
+
+    index_test_corpus(migrated_db)
+    run_id = new_run(migrated_db, PASSING_TEST)
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        retriever=TextRetriever(),
+    )
+
+    output = migrated_db.execute(
+        "SELECT output FROM steps WHERE run_id = %s AND kind = 'retrieve'", (run_id,)
+    ).fetchone()[0]
+
+    assert output["chunks"], "retrieval found nothing for a task the corpus covers"
+    assert output["chunks"][0]["source"] == "notes"
+
+
+def test_the_retrieved_text_reaches_the_prompt(migrated_db):
+    from app.retrieval import TextRetriever
+
+    index_test_corpus(migrated_db)
+    run_id = new_run(migrated_db, PASSING_TEST)
+    model = StubModel(replies=[CORRECT])
+
+    run_agent_loop(migrated_db, run_id, model, token_budget=50_000, retriever=TextRetriever())
+
+    assert "add two integers" in model.prompts[0], "the chunk never reached the model"
+
+
+def test_the_loop_still_runs_without_a_retriever(migrated_db):
+    run_id = new_run(migrated_db, PASSING_TEST)
+
+    result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
+
+    assert result.status == "succeeded"
