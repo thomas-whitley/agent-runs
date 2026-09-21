@@ -7,8 +7,10 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
     "anthropic>=0.40",
+    "azure-monitor-opentelemetry>=1.6",
     "fastapi>=0.115",
     "openai>=1.60",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
     "psycopg[binary,pool]>=3.2",
     "pytest>=8.3",
     "uvicorn[standard]>=0.32",

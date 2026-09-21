@@ -1,0 +1,41 @@
+name: Keepalive
+
+# The Supabase free plan pauses a project after a week without traffic, so this
+# touches it daily. Hitting the live health endpoint at the same time makes a
+# free uptime check out of the same run.
+on:
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.17"
+
+      - name: Touch the database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          uv run --no-project --with "psycopg[binary]" python - <<'PY'
+          import os
+          import psycopg
+
+          with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=15) as conn:
+              rows = conn.execute("SELECT count(*) FROM runs").fetchone()[0]
+          print(f"database awake, {rows} runs recorded")
+          PY
+
+      - name: Touch the live health endpoint
+        if: ${{ vars.LIVE_URL != '' }}
+        run: curl --fail --silent --show-error --max-time 60 "${{ vars.LIVE_URL }}/health"

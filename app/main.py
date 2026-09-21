@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from app.config import load_settings
 from app.migrations import apply_migrations
 from app.stream import event_stream, parse_last_event_id
+from app.telemetry import configure_telemetry
 
 
 class RunRequest(BaseModel):
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
 
     app.state.settings = settings
     app.state.pool = pool
+    app.state.tracing = configure_telemetry(app)
     try:
         yield
     finally:
