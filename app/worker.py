@@ -9,13 +9,19 @@ from app.config import Settings, load_settings
 from app.loop import LoopResult, run_agent_loop
 from app.migrations import apply_migrations
 from app.model import Model, StubModel
-from app.runs import claim_run, record_step
+from app.runs import claim_run, heartbeat, record_step
 
 logger = logging.getLogger("agent_runs.worker")
 
-_PENDING = """
+# Unclaimed runs, and runs whose worker stopped reporting for longer than the
+# lease. The second case is a worker that was killed outright.
+_CLAIMABLE = """
 SELECT id FROM runs
-WHERE status = 'pending' AND claimed_by IS NULL
+WHERE finished_at IS NULL
+  AND (
+        (status = 'pending' AND claimed_by IS NULL)
+        OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %s))
+      )
 ORDER BY created_at
 LIMIT 5
 """
@@ -30,10 +36,12 @@ def runs_started_today(conn: psycopg.Connection) -> int:
     return conn.execute(_STARTED_TODAY).fetchone()[0]
 
 
-def claim_next_run(conn: psycopg.Connection, worker_id: str) -> str | None:
-    """Claim the oldest pending run this worker can get. None means nothing to do."""
-    for (run_id,) in conn.execute(_PENDING).fetchall():
-        if claim_run(conn, run_id, worker_id):
+def claim_next_run(
+    conn: psycopg.Connection, worker_id: str, lease_seconds: float = 60.0
+) -> str | None:
+    """Claim the oldest claimable run. None means there is nothing to do."""
+    for (run_id,) in conn.execute(_CLAIMABLE, (lease_seconds,)).fetchall():
+        if claim_run(conn, run_id, worker_id, lease_seconds=lease_seconds):
             return run_id
     return None
 
@@ -64,6 +72,7 @@ def process_run(
         model,
         token_budget=settings.token_budget,
         verify_timeout_seconds=settings.verify_timeout_seconds,
+        on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
     )
 
 
@@ -103,7 +112,7 @@ def main() -> None:  # pragma: no cover - the process entry point
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
         while True:
             try:
-                run_id = claim_next_run(conn, settings.worker_id)
+                run_id = claim_next_run(conn, settings.worker_id, settings.lease_seconds)
                 if run_id is None:
                     time.sleep(settings.poll_seconds)
                     continue

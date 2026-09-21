@@ -29,7 +29,9 @@ packages = ["app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# The integration tests need the compose stack, so they are opt in.
+addopts = "-q -m 'not integration'"
+markers = ["integration: needs a running docker compose stack"]
 filterwarnings = [
     "error",
     # starlette references a deprecated anyio alias at import time. Upstream, not ours.

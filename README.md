@@ -27,7 +27,7 @@ uv run pytest
 | Claim | Test | Status |
 |---|---|---|
 | A client that drops mid run reconnects with `Last-Event-ID` and receives the remaining steps exactly once | `tests/test_resume.py` | green |
-| Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | pending |
+| Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | green |
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | pending |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC, traced end to end | `.github/workflows/deploy.yml` | pending |
@@ -103,6 +103,57 @@ Measured on the two runs above, both solved on the first attempt: 167 and 325
 tokens, 14.8 and 22.6 seconds. The per run budget is 50000 tokens, so the cap is
 far above what the demo task needs. It exists for the case where the agent keeps
 failing and retrying.
+
+## Two replicas, one port
+
+Compose runs two api replicas. Neither publishes a host port, so nginx is the
+only way in and a client cannot pin itself to one of them. nginx re-resolves
+Docker's DNS on every request, which is what spreads them.
+
+```
+$ for i in $(seq 8); do curl -sD- -o/dev/null localhost:8000/health | grep -i x-replica; done | sort | uniq -c
+      6 x-replica: 13f2ed018fc0
+      2 x-replica: 78634d84dabc
+```
+
+Every response names the replica that served it, so a test can show a reconnect
+moved between processes rather than assuming it.
+
+`tests/test_two_replicas.py` reads three events, drops the socket, writes three
+more while nobody is connected, then reconnects with `Last-Event-ID` until the
+proxy sends it to the other replica. It asserts that no event is repeated, none
+is lost, and six arrive in total.
+
+```
+tests/test_two_replicas.py::test_a_stream_dropped_on_one_replica_resumes_on_the_other PASSED [ 50%]
+tests/test_two_replicas.py::test_both_replicas_answer_through_the_one_port PASSED [100%]
+
+======================= 2 passed, 56 deselected in 0.30s =======================
+```
+
+Run with one replica instead of two, both tests fail. Nothing about a connected
+client lives in the api process, so there was no cursor to move. That is the
+whole point of putting the events table in the middle.
+
+These need the stack up, so they are marked `integration` and left out of the
+default run.
+
+```
+docker compose up --build -d --wait
+AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest -m integration
+```
+
+## A claim that outlives its worker
+
+A worker killed outright cannot release its claim, so the claim carries a lease.
+The worker refreshes `heartbeat_at` as it records each step, and a run whose
+heartbeat has gone stale past `LEASE_SECONDS` can be taken over by another
+worker. A run that already finished is never reclaimed.
+
+The replacement worker continues from the last recorded seq rather than starting
+again, so the steps the dead worker committed stay committed and its token spend
+still counts against the budget. `tests/test_idempotent.py` and
+`tests/test_loop.py` cover the takeover, the heartbeat, and the resume.
 
 ## What the agent does
 

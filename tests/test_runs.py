@@ -37,3 +37,24 @@ def test_health_reports_ok(start_server):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_every_response_names_the_replica_that_served_it(start_server, monkeypatch):
+    """Without this there is no way to show a reconnect landed on the other replica."""
+    monkeypatch.setenv("REPLICA_ID", "replica-one")
+    base_url = start_server()
+
+    response = httpx2.get(f"{base_url}/health")
+
+    assert response.headers["X-Replica"] == "replica-one"
+
+
+def test_the_replica_id_defaults_to_the_hostname(start_server, monkeypatch):
+    import socket
+
+    monkeypatch.delenv("REPLICA_ID", raising=False)
+    base_url = start_server()
+
+    response = httpx2.get(f"{base_url}/health")
+
+    assert response.headers["X-Replica"] == socket.gethostname()

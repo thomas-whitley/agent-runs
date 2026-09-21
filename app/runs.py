@@ -9,10 +9,29 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-_CLAIM = """
+_CLAIM_UNCLAIMED = """
 UPDATE runs
-SET claimed_by = %s, status = 'running'
-WHERE id = %s AND claimed_by IS NULL
+SET claimed_by = %s, status = 'running', heartbeat_at = now()
+WHERE id = %s AND claimed_by IS NULL AND finished_at IS NULL
+"""
+
+# A run is also claimable when its worker stopped reporting. finished_at guards
+# against reclaiming something that already completed.
+_CLAIM_OR_TAKE_OVER = """
+UPDATE runs
+SET claimed_by = %s, status = 'running', heartbeat_at = now()
+WHERE id = %s
+  AND finished_at IS NULL
+  AND (
+        claimed_by IS NULL
+        OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %s))
+      )
+"""
+
+_HEARTBEAT = """
+UPDATE runs
+SET heartbeat_at = now()
+WHERE id = %s AND claimed_by = %s AND finished_at IS NULL
 """
 
 _INSERT_STEP = """
@@ -28,9 +47,27 @@ ON CONFLICT (run_id, seq) DO NOTHING
 """
 
 
-def claim_run(conn: psycopg.Connection, run_id: str, worker_id: str) -> bool:
-    """Take ownership of a run. False means another worker already has it."""
-    cursor = conn.execute(_CLAIM, (worker_id, run_id))
+def claim_run(
+    conn: psycopg.Connection,
+    run_id: str,
+    worker_id: str,
+    lease_seconds: float | None = None,
+) -> bool:
+    """Take ownership of a run. False means another worker holds a live claim.
+
+    With lease_seconds, a run whose worker stopped reporting for that long is
+    taken over as well.
+    """
+    if lease_seconds is None:
+        cursor = conn.execute(_CLAIM_UNCLAIMED, (worker_id, run_id))
+    else:
+        cursor = conn.execute(_CLAIM_OR_TAKE_OVER, (worker_id, run_id, lease_seconds))
+    return cursor.rowcount == 1
+
+
+def heartbeat(conn: psycopg.Connection, run_id: str, worker_id: str) -> bool:
+    """Say this worker is still on the run. False means it no longer owns it."""
+    cursor = conn.execute(_HEARTBEAT, (run_id, worker_id))
     return cursor.rowcount == 1
 
 

@@ -170,3 +170,51 @@ def test_a_failing_model_is_not_retried_forever(migrated_db):
     )
 
     assert model.calls == 3
+
+
+def test_the_loop_resumes_after_a_worker_died_part_way(migrated_db):
+    """A replacement worker continues the run instead of starting it again."""
+    from app.runs import record_step
+
+    run_id = new_run(migrated_db, PASSING_TEST)
+    record_step(migrated_db, run_id, 1, "plan", output={"text": "a plan"})
+    record_step(migrated_db, run_id, 2, "retrieve", output={"chunks": []})
+    record_step(migrated_db, run_id, 3, "act", output={"code": "broken"}, tokens=100)
+    migrated_db.execute("UPDATE runs SET tokens_used = 100 WHERE id = %s", (run_id,))
+
+    result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
+
+    assert result.status == "succeeded"
+    assert event_kinds(migrated_db, run_id) == [
+        "plan",
+        "retrieve",
+        "act",
+        "act",
+        "verify",
+        "done",
+    ]
+    assert result.attempts == 2, "the attempt the dead worker made must still count"
+    assert result.tokens_used == 200, "tokens already spent must carry over"
+
+    seqs = [
+        row[0]
+        for row in migrated_db.execute(
+            "SELECT seq FROM events WHERE run_id = %s ORDER BY seq", (run_id,)
+        ).fetchall()
+    ]
+    assert seqs == [1, 2, 3, 4, 5, 6]
+
+
+def test_the_loop_reports_progress_so_its_claim_stays_alive(migrated_db):
+    run_id = new_run(migrated_db, PASSING_TEST)
+    beats = []
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        on_step=lambda: beats.append(1),
+    )
+
+    assert len(beats) >= 3, "the loop must report progress as it goes"

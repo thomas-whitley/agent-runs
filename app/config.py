@@ -22,6 +22,8 @@ class Settings:
     worker_id: str
     poll_seconds: float
     verify_timeout_seconds: float
+    lease_seconds: float
+    replica_id: str
 
 
 def _default_worker_id() -> str:
@@ -41,4 +43,6 @@ def load_settings() -> Settings:
         worker_id=os.environ.get("WORKER_ID") or _default_worker_id(),
         poll_seconds=float(os.environ.get("POLL_SECONDS", "1")),
         verify_timeout_seconds=float(os.environ.get("VERIFY_TIMEOUT_SECONDS", "10")),
+        lease_seconds=float(os.environ.get("LEASE_SECONDS", "60")),
+        replica_id=os.environ.get("REPLICA_ID") or socket.gethostname(),
     )

@@ -29,6 +29,8 @@ def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
         worker_id="worker-test",
         poll_seconds=0.05,
         verify_timeout_seconds=10.0,
+        lease_seconds=60.0,
+        replica_id="replica-test",
     )
     return Settings(**{**defaults, **overrides})
 
@@ -114,3 +116,47 @@ def test_build_model_refuses_when_no_key_is_configured():
 
     with pytest.raises(RuntimeError, match="no model credentials"):
         build_model(settings)
+
+
+def test_claim_next_run_takes_over_a_run_whose_worker_stopped_reporting(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_next_run(migrated_db, "worker-a", lease_seconds=60)
+    migrated_db.execute(
+        "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
+    )
+
+    assert claim_next_run(migrated_db, "worker-b", lease_seconds=60) == run_id
+
+
+def test_claim_next_run_leaves_a_live_claim_alone(migrated_db):
+    new_run(migrated_db)
+    claim_next_run(migrated_db, "worker-a", lease_seconds=60)
+
+    assert claim_next_run(migrated_db, "worker-b", lease_seconds=60) is None
+
+
+def test_claim_next_run_ignores_a_finished_run(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_next_run(migrated_db, "worker-a", lease_seconds=60)
+    migrated_db.execute(
+        "UPDATE runs SET status = 'succeeded', finished_at = now(), "
+        "heartbeat_at = now() - interval '10 minutes' WHERE id = %s",
+        (run_id,),
+    )
+
+    assert claim_next_run(migrated_db, "worker-b", lease_seconds=60) is None
+
+
+def test_processing_a_run_refreshes_its_heartbeat(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_next_run(migrated_db, "worker-test", lease_seconds=60)
+    migrated_db.execute(
+        "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
+    )
+
+    process_run(migrated_db, run_id, StubModel(replies=[CORRECT]), settings_with())
+
+    age = migrated_db.execute(
+        "SELECT extract(epoch from (now() - heartbeat_at)) FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()[0]
+    assert age < 60, "the worker must report progress while it runs"

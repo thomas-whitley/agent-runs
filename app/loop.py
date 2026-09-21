@@ -6,6 +6,7 @@ solution.py until that file passes, or until the token budget is gone.
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import psycopg
@@ -89,18 +90,34 @@ def run_agent_loop(
     verify_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     model_retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
     model_retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
+    on_step: Callable[[], None] | None = None,
 ) -> LoopResult:
-    test_code = conn.execute("SELECT task FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
+    test_code, tokens_used = conn.execute(
+        "SELECT task, tokens_used FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()
 
-    seq = 0
-    tokens_used = 0
-    attempts = 0
+    # A replacement worker continues where the dead one stopped. Steps are keyed
+    # on (run_id, seq), so carrying on from the last seq cannot collide.
+    seq, attempts = conn.execute(
+        "SELECT coalesce(max(seq), 0), count(*) FILTER (WHERE kind = 'act') "
+        "FROM steps WHERE run_id = %s",
+        (run_id,),
+    ).fetchone()
 
-    seq += 1
-    record_step(conn, run_id, seq, "plan", output={"text": "write solution.py, then run pytest"})
+    def progress() -> None:
+        if on_step is not None:
+            on_step()
 
-    seq += 1
-    record_step(conn, run_id, seq, "retrieve", output={"chunks": []})
+    if seq == 0:
+        seq += 1
+        record_step(
+            conn, run_id, seq, "plan", output={"text": "write solution.py, then run pytest"}
+        )
+        progress()
+
+        seq += 1
+        record_step(conn, run_id, seq, "retrieve", output={"chunks": []})
+        progress()
 
     status = "budget_exhausted"
     error_message: str | None = None
@@ -124,6 +141,7 @@ def run_agent_loop(
 
             seq += 1
             record_step(conn, run_id, seq, "act", output={"code": code}, tokens=reply.tokens)
+            progress()
 
             result = verify(code, test_code, timeout_seconds=verify_timeout_seconds)
 
@@ -139,6 +157,7 @@ def run_agent_loop(
                     "output": result.output,
                 },
             )
+            progress()
 
             if result.passed:
                 status = "succeeded"

@@ -47,6 +47,13 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="agent-runs", lifespan=lifespan)
 
+    @app.middleware("http")
+    async def name_the_replica(request: Request, call_next):
+        """So a client can see which replica answered, and prove a reconnect moved."""
+        response = await call_next(request)
+        response.headers["X-Replica"] = request.app.state.settings.replica_id
+        return response
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}

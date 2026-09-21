@@ -1,6 +1,6 @@
 """A retried step that already committed must be a no-op."""
 
-from app.runs import claim_run, record_step
+from app.runs import claim_run, heartbeat, record_step
 
 
 def new_run(conn, task: str = "make the test pass") -> str:
@@ -66,3 +66,63 @@ def test_a_later_step_still_writes_after_a_retried_one(migrated_db):
         ).fetchall()
     ]
     assert seqs == [1, 2]
+
+
+def test_a_fresh_claim_is_not_stolen(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+
+    assert claim_run(migrated_db, run_id, "worker-b", lease_seconds=60) is False
+
+    claimed_by = migrated_db.execute(
+        "SELECT claimed_by FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()[0]
+    assert claimed_by == "worker-a"
+
+
+def test_a_claim_whose_worker_stopped_reporting_is_reclaimed(migrated_db):
+    """A worker killed outright leaves a run claimed. Its lease must expire."""
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+    migrated_db.execute(
+        "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
+    )
+
+    assert claim_run(migrated_db, run_id, "worker-b", lease_seconds=60) is True
+
+    claimed_by = migrated_db.execute(
+        "SELECT claimed_by FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()[0]
+    assert claimed_by == "worker-b"
+
+
+def test_a_heartbeat_keeps_a_claim_alive(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+    migrated_db.execute(
+        "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
+    )
+
+    heartbeat(migrated_db, run_id, "worker-a")
+
+    assert claim_run(migrated_db, run_id, "worker-b", lease_seconds=60) is False
+
+
+def test_a_heartbeat_from_another_worker_does_nothing(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+
+    assert heartbeat(migrated_db, run_id, "worker-b") is False
+    assert heartbeat(migrated_db, run_id, "worker-a") is True
+
+
+def test_a_finished_run_is_never_reclaimed(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+    migrated_db.execute(
+        "UPDATE runs SET status = 'succeeded', finished_at = now(), "
+        "heartbeat_at = now() - interval '10 minutes' WHERE id = %s",
+        (run_id,),
+    )
+
+    assert claim_run(migrated_db, run_id, "worker-b", lease_seconds=60) is False
