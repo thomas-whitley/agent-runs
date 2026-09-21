@@ -8,6 +8,7 @@ license = { text = "MIT" }
 dependencies = [
     "anthropic>=0.40",
     "fastapi>=0.115",
+    "openai>=1.60",
     "psycopg[binary,pool]>=3.2",
     "pytest>=8.3",
     "uvicorn[standard]>=0.32",

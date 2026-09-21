@@ -68,14 +68,28 @@ def process_run(
 
 
 def build_model(settings: Settings) -> Model:
+    """Pick the model from what is configured, without a provider switch to maintain."""
     if settings.model == "stub":
         return StubModel(replies=[""])
-    if not settings.anthropic_api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set and MODEL is not 'stub'")
 
-    from app.model import AnthropicModel
+    if settings.model_base_url:
+        from app.model import OpenAICompatibleModel
 
-    return AnthropicModel(model=settings.model, api_key=settings.anthropic_api_key)
+        return OpenAICompatibleModel(
+            model=settings.model,
+            api_key=settings.model_api_key,
+            base_url=settings.model_base_url,
+        )
+
+    if settings.anthropic_api_key:
+        from app.model import AnthropicModel
+
+        return AnthropicModel(model=settings.model, api_key=settings.anthropic_api_key)
+
+    raise RuntimeError(
+        "no model credentials: set MODEL=stub, or MODEL_BASE_URL with MODEL_API_KEY, "
+        "or ANTHROPIC_API_KEY"
+    )
 
 
 def main() -> None:  # pragma: no cover - the process entry point

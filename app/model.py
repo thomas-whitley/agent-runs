@@ -64,3 +64,41 @@ class AnthropicModel:
         text = "".join(block.text for block in message.content if block.type == "text")
         tokens = message.usage.input_tokens + message.usage.output_tokens
         return ModelReply(text=text, tokens=tokens)
+
+
+class OpenAICompatibleModel:
+    """Any endpoint that speaks the OpenAI chat completions format.
+
+    Gemini serves one at https://generativelanguage.googleapis.com/v1beta/openai/
+    so the same class covers it, Groq, and anything else with that wire format.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        max_tokens: int = 2048,
+        client: object | None = None,
+    ) -> None:
+        if client is None:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key, base_url=base_url)
+        self._client = client
+        self._model = model
+        self._max_tokens = max_tokens
+
+    def complete(self, system: str, prompt: str) -> ModelReply:
+        response = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        text = response.choices[0].message.content or ""
+        usage = getattr(response, "usage", None)
+        tokens = (usage.prompt_tokens + usage.completion_tokens) if usage else 0
+        return ModelReply(text=text, tokens=tokens)

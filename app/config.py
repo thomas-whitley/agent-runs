@@ -15,6 +15,8 @@ class Settings:
     keepalive_seconds: float
     model: str
     anthropic_api_key: str | None
+    model_base_url: str | None
+    model_api_key: str | None
     token_budget: int
     max_runs_per_day: int
     worker_id: str
@@ -32,6 +34,8 @@ def load_settings() -> Settings:
         keepalive_seconds=float(os.environ.get("KEEPALIVE_SECONDS", "15")),
         model=os.environ.get("MODEL", DEFAULT_MODEL),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
+        model_base_url=os.environ.get("MODEL_BASE_URL") or None,
+        model_api_key=os.environ.get("MODEL_API_KEY") or None,
         token_budget=int(os.environ.get("TOKEN_BUDGET", "50000")),
         max_runs_per_day=int(os.environ.get("MAX_RUNS_PER_DAY", "20")),
         worker_id=os.environ.get("WORKER_ID") or _default_worker_id(),

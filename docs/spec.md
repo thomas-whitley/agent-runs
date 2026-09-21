@@ -125,3 +125,26 @@ One bullet under Projects, replacing nothing: "agent-runs | 2026, github.com/tho
 3. The verifiable task for the loop. Recommendation: generate a function that passes a supplied pytest file. It is small, it verifies itself, and it is the same idea as Chipforge's "the design either simulates or it doesn't".
 
 Constraint from Thomas, 2026-09-21: as cheap as possible. Any future change to this spec that adds a paid resource needs his yes first.
+
+## Decision, 2026-09-21 evening: the model is configurable, and the default for demos is a free tier
+
+Thomas asked whether a free model could stand in for the paid Anthropic API, and
+chose the Gemini free tier. Nothing in the claims table depends on which model
+runs the loop, so this costs no proof. The change is in `app/model.py`, which
+defines a `Model` protocol with one `complete` method and three implementations:
+`StubModel` (offline, used by CI and the tests), `AnthropicModel` (the Anthropic
+SDK) and `OpenAICompatibleModel` (any endpoint speaking the OpenAI chat
+completions format, which covers Gemini, Groq and others).
+
+`app.worker.build_model` picks between them from configuration rather than a
+provider flag. `MODEL=stub` gives the offline model. A `MODEL_BASE_URL` gives the
+OpenAI compatible client. Otherwise an `ANTHROPIC_API_KEY` gives the Anthropic
+client. With none of those set the worker refuses to start and says so.
+
+Gemini's OpenAI compatible endpoint is
+`https://generativelanguage.googleapis.com/v1beta/openai/` and keys come from
+Google AI Studio. Current model ids at the time of writing include
+`gemini-3.8-flash` and `gemini-3.5-flash-lite`.
+
+The README names whichever model produced the numbers it reports. It does not
+claim Claude when the trace came from something else.

@@ -91,7 +91,9 @@ tests/test_sandbox.py::test_the_sandbox_cannot_open_a_socket PASSED      [100%]
 
 ## Guards
 
-Three numbers are configuration, not code. `TOKEN_BUDGET` is 50000 per run and is counted in the loop. `MAX_RUNS_PER_DAY` is 20 and is counted in the worker from `runs.created_at`, and a refused run still gets its `done` event so a client waiting on the stream is not left hanging. `MODEL` is `claude-haiku-4-5-20251001`, and setting it to `stub` runs the loop with an offline model that needs no key, which is what CI uses so a push costs nothing.
+Three numbers are configuration, not code. `TOKEN_BUDGET` is 50000 per run and is counted in the loop. `MAX_RUNS_PER_DAY` is 20 and is counted in the worker from `runs.created_at`, and a refused run still gets its `done` event so a client waiting on the stream is not left hanging. `MODEL` chooses the model, and setting it to `stub` runs the loop with an offline model that needs no key, which is what CI uses so a push costs nothing.
+
+The loop talks to a `Model` protocol with one `complete` method, so the provider is configuration. `MODEL=stub` is offline. Setting `MODEL_BASE_URL` and `MODEL_API_KEY` uses any endpoint speaking the OpenAI chat completions format, which covers the Gemini free tier at `https://generativelanguage.googleapis.com/v1beta/openai/`. Setting `ANTHROPIC_API_KEY` uses the Anthropic SDK. With none of them set the worker refuses to start and says which one to set. `.env.example` lists all of it.
 
 ## Cost
 

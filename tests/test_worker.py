@@ -1,8 +1,10 @@
 """Claiming pending runs, and the guard that stops a public URL burning the key."""
 
+import pytest
+
 from app.config import Settings
-from app.model import StubModel
-from app.worker import claim_next_run, process_run, runs_started_today
+from app.model import OpenAICompatibleModel, StubModel
+from app.worker import build_model, claim_next_run, process_run, runs_started_today
 
 PASSING_TEST = """
 from solution import add
@@ -14,18 +16,21 @@ def test_add():
 CORRECT = "```python\ndef add(a, b):\n    return a + b\n```"
 
 
-def settings_with(max_runs_per_day: int = 20) -> Settings:
-    return Settings(
+def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
+    defaults = dict(
         database_url="unused",
         keepalive_seconds=15.0,
         model="stub",
         anthropic_api_key=None,
+        model_base_url=None,
+        model_api_key=None,
         token_budget=50_000,
         max_runs_per_day=max_runs_per_day,
         worker_id="worker-test",
         poll_seconds=0.05,
         verify_timeout_seconds=10.0,
     )
+    return Settings(**{**defaults, **overrides})
 
 
 def new_run(conn, task: str = PASSING_TEST) -> str:
@@ -88,3 +93,24 @@ def test_the_daily_limit_refuses_the_run_and_closes_its_stream(migrated_db):
 
     assert payload["kind"] == "done", "a refused run must still close its stream"
     assert payload["output"]["status"] == "refused"
+
+
+def test_build_model_returns_the_stub_when_the_model_is_stub():
+    assert isinstance(build_model(settings_with()), StubModel)
+
+
+def test_build_model_uses_an_openai_compatible_endpoint_when_a_base_url_is_set():
+    settings = settings_with(
+        model="gemini-3.8-flash",
+        model_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        model_api_key="not-a-real-key",
+    )
+
+    assert isinstance(build_model(settings), OpenAICompatibleModel)
+
+
+def test_build_model_refuses_when_no_key_is_configured():
+    settings = settings_with(model="claude-haiku-4-5-20251001")
+
+    with pytest.raises(RuntimeError, match="no model credentials"):
+        build_model(settings)
