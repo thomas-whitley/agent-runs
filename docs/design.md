@@ -71,11 +71,21 @@ The loop talks to a `Model` protocol with one `complete` method. `MODEL=stub` ru
   useful is traced yet and the repo does not claim otherwise. Checked against the
   live deployment on 2026-09-21: the only rows in Application Insights are the
   Azure Monitor SDK fetching its own configuration. There are no `requests` rows,
-  because `FastAPIInstrumentor.instrument_app` runs inside the lifespan, after
-  Starlette has built its middleware stack. The worker never calls
+  because `FastAPIInstrumentor.instrument_app` runs inside the lifespan. It works by
+  patching `build_middleware_stack`, and Starlette has already called that by the
+  time lifespan startup runs, so the patch never takes and nothing raises. Measured
+  on starlette 1.6.0: instrumenting at construction puts `OpenTelemetryMiddleware`
+  in the stack, instrumenting in the lifespan leaves it out. The worker never calls
   `configure_telemetry` at all, so the half of the system that runs the agent loop
   emits nothing. `cloud_RoleName` is `unknown_service` because no service name is
-  set. Until those three are fixed, nothing here is traced end to end.
+  set.
+
+  Even with all three fixed, the api and the worker would produce two unrelated
+  traces rather than one. They share no trace context, because they communicate only
+  through the events table and nothing carries a `traceparent`. End to end tracing
+  needs that context persisted on the run when it is created and restored in the
+  worker before the loop starts. That is what the deleted sentence about the trace
+  id riding on the event payload was for.
 - Container Apps cuts an HTTP request at 240 seconds on the consumption plan. Keepalives do not extend it and raising it needs paid premium ingress, so a run longer than that has its stream cut and the client reconnects with `Last-Event-ID`.
 
 ## Cost

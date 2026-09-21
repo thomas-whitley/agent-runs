@@ -34,20 +34,31 @@ Nothing is half written. Two loose ends, both decisions rather than code:
 2. **Tracing is configured but traces nothing.** Verified against the live
    deployment on 2026-09-21. The exporter works and reaches Azure Monitor, but the
    only rows in Application Insights are the SDK fetching its own configuration.
-   Three separate faults: `FastAPIInstrumentor.instrument_app` is called inside the
-   lifespan in `app/main.py`, which is after Starlette builds its middleware stack,
-   so there are no `requests` rows; `app/worker.py` never calls
-   `configure_telemetry`, so the agent loop emits nothing; and no service name is
-   set, so `cloud_RoleName` is `unknown_service`. The draft CV bullet ends "traced
+   Three separate faults. `FastAPIInstrumentor.instrument_app` is called inside the
+   lifespan in `app/main.py`; it works by patching `build_middleware_stack`, which
+   Starlette has already called by then, so the patch never takes and nothing
+   raises. Measured on starlette 1.6.0: instrumenting at construction puts
+   `OpenTelemetryMiddleware` in the stack, instrumenting in the lifespan leaves it
+   out, which is why there are no `requests` rows. Second, `app/worker.py` never
+   calls `configure_telemetry`, so the agent loop emits nothing. Third, no service
+   name is set, so `cloud_RoleName` is `unknown_service`. The draft CV bullet ends "traced
    end to end" and **that phrase cannot ship until this is fixed**. The README
    claims row deliberately says only "Deployed to Azure Container Apps by GitHub
    Actions with OIDC".
 
-   The fix is roughly: move `instrument_app` into `create_app()` after the routes
-   are added, call `configure_telemetry()` from the worker's `main()`, and set
-   `OTEL_SERVICE_NAME` per role in the Bicep. Then redeploy, post a run, and
-   confirm a single trace carries two `cloud_RoleName` values. Query without the
-   broken az extension:
+   The fix is four steps, not three. Move `instrument_app` into `create_app()`
+   after the routes are added. Call `configure_telemetry()` from the worker's
+   `main()`. Set `OTEL_SERVICE_NAME` per role in the Bicep. Those three get you
+   spans from both roles, but as **two unrelated traces**, because the api and the
+   worker share no trace context: they communicate only through the events table
+   and nothing carries a `traceparent`. For one trace spanning a run, the fourth
+   step is to persist the `traceparent` on the run row when it is created and
+   restore it in the worker before the loop starts. That is exactly what the
+   deleted design sentence about the trace id riding on the event payload was for,
+   so reinstate it as a claim only once the code does it.
+
+   Do not chase "one trace with two role names" before that fourth step; it is not
+   reachable. Query without the broken az extension:
 
    ```
    az rest --method post \
