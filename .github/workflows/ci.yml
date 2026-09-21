@@ -8,6 +8,25 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent
+          POSTGRES_DB: agent_runs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agent_runs"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      TEST_DATABASE_URL: postgresql://agent:agent@localhost:5432/agent_runs
+
     steps:
       - uses: actions/checkout@v5
 

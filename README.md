@@ -13,9 +13,10 @@ curl http://localhost:8000/health
 
 That prints `{"status":"ok"}`. The same image serves both roles, chosen by the `ROLE` environment variable, which is `api` or `worker`. The worker arrives at task 3.
 
-Tests and linting run without Docker.
+The tests need a Postgres to work against. They use `TEST_DATABASE_URL`, not `DATABASE_URL`, because they drop and recreate the public schema and `DATABASE_URL` points at a real project in a local `.env`. The default is the compose database, and a non local host is refused unless you set `ALLOW_REMOTE_TEST_DB`.
 
 ```
+docker compose up -d db --wait
 uv sync
 uv run ruff check .
 uv run pytest
@@ -25,11 +26,42 @@ uv run pytest
 
 | Claim | Test | Status |
 |---|---|---|
-| A client that drops mid run reconnects with `Last-Event-ID` and receives the remaining steps exactly once | `tests/test_resume.py` | pending |
+| A client that drops mid run reconnects with `Last-Event-ID` and receives the remaining steps exactly once | `tests/test_resume.py` | green |
 | Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | pending |
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | pending |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | pending |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC, traced end to end | `.github/workflows/deploy.yml` | pending |
+
+## Resume, and the test that proves it
+
+The test opens a stream, lets steps 1 to 3 arrive while it is connected, drops the
+connection, lets steps 4 and 5 happen with nobody listening, then reconnects with
+`Last-Event-ID` set to the last event it saw. It asserts that no event is repeated,
+none is lost, and six events are delivered in total.
+
+```
+tests/test_resume.py::test_stream_replays_every_event_then_closes_on_done PASSED [ 33%]
+tests/test_resume.py::test_dropping_a_live_stream_and_reconnecting_resumes_exactly_once PASSED [ 66%]
+tests/test_resume.py::test_unknown_run_is_not_found PASSED               [100%]
+
+============================== 3 passed in 2.23s ===============================
+```
+
+The tests run against a real uvicorn on a real socket rather than an in process test
+client, because an in process client buffers the response instead of delivering it
+chunk by chunk and so cannot drop a live stream part way through.
+
+The same thing by hand, against the compose stack, replaying from event 1:
+
+```
+$ curl -s -N -H "Last-Event-ID: 1" localhost:8000/runs/$RUN/events
+id: 2
+event: done
+data: {"kind": "done", "status": "succeeded"}
+```
+
+Nothing about a connected client is held in the server. The events table is the
+whole cursor, which is what lets a reconnect land on any replica.
 
 ## What the agent does
 

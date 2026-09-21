@@ -12,6 +12,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-dev --no-install-project
 
 COPY app ./app
+COPY migrations ./migrations
 RUN uv sync --locked --no-dev
 
 ENV PATH="/srv/.venv/bin:$PATH"
