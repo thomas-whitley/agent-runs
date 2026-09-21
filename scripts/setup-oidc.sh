@@ -40,11 +40,21 @@ for subject in "repo:${REPO}:ref:refs/heads/main" "repo:${REPO}:environment:prod
   fi
 done
 
-az role assignment create \
-  --assignee "$client_id" \
-  --role Contributor \
-  --scope "/subscriptions/${subscription_id}/resourceGroups/${RESOURCE_GROUP}" \
-  --output none 2>/dev/null || true
+# Assign by the service principal's object id, not the app id. Assigning by
+# app id needs a directory lookup that fails while the principal is still
+# propagating, and swallowing that leaves a deploy that cannot touch anything.
+sp_object_id="$(az ad sp show --id "$client_id" --query id --output tsv)"
+scope="/subscriptions/${subscription_id}/resourceGroups/${RESOURCE_GROUP}"
+
+if ! az role assignment list --assignee-object-id "$sp_object_id" --scope "$scope" \
+      --query "[?roleDefinitionName=='Contributor']" --output tsv | grep -q .; then
+  az role assignment create \
+    --assignee-object-id "$sp_object_id" \
+    --assignee-principal-type ServicePrincipal \
+    --role Contributor \
+    --scope "$scope" \
+    --output none
+fi
 
 echo "Put these in the repo's Actions secrets:"
 echo "  AZURE_CLIENT_ID       ${client_id}"
