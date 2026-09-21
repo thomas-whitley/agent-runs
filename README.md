@@ -2,7 +2,24 @@
 
 A FastAPI agent loop that streams its steps over SSE and resumes from the last event after a dropped connection. Run state lives in PostgreSQL, so more than one replica serves the same run. Deployed to Azure Container Apps at scale to zero by GitHub Actions.
 
-Status: seed commit. The design is in `docs/spec.md` and the build order in `docs/build-brief.md`. The claims table below fills in as each test goes green and not before.
+Status: task 1 of the build order is done. The service builds as one image, runs under `docker compose` against Postgres with pgvector, and answers `GET /health`. The design is in `docs/spec.md` and the build order in `docs/build-brief.md`. The claims table below fills in as each test goes green and not before.
+
+## Running it locally
+
+```
+docker compose up --build --wait
+curl http://localhost:8000/health
+```
+
+That prints `{"status":"ok"}`. The same image serves both roles, chosen by the `ROLE` environment variable, which is `api` or `worker`. The worker arrives at task 3.
+
+Tests and linting run without Docker.
+
+```
+uv sync
+uv run ruff check .
+uv run pytest
+```
 
 ## Claims and their proof
 
