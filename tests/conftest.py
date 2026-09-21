@@ -93,3 +93,13 @@ def start_server(clean_db: str, monkeypatch: pytest.MonkeyPatch):
     for server, thread in running:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+@pytest.fixture
+def migrated_db(clean_db: str):
+    """A connection to a migrated, empty database, for code that does not go through the api."""
+    from app.migrations import apply_migrations
+
+    apply_migrations(clean_db)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        yield conn

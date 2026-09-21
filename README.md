@@ -28,7 +28,7 @@ uv run pytest
 |---|---|---|
 | A client that drops mid run reconnects with `Last-Event-ID` and receives the remaining steps exactly once | `tests/test_resume.py` | green |
 | Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | pending |
-| A retried step that already committed is a no-op | `tests/test_idempotent.py` | pending |
+| A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | pending |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC, traced end to end | `.github/workflows/deploy.yml` | pending |
 
@@ -66,6 +66,32 @@ whole cursor, which is what lets a reconnect land on any replica.
 ## What the agent does
 
 You post a pytest file. The agent writes the function that makes it pass, running pytest in a subprocess with a timeout and no network inside the worker container. That is the whole sandbox, and it is a demo sandbox, not a security boundary.
+
+The subprocess starts with the socket module replaced, so the code under verification cannot open a connection. `tests/test_sandbox.py` asserts that a test which calls `socket.create_connection` fails, that a solution which loops forever is killed at the timeout, and that a wrong answer comes back with pytest's output rather than an exception.
+
+## The worker and the loop
+
+The worker claims a run with one `UPDATE ... WHERE claimed_by IS NULL`, so two workers racing for the same run produce one winner and one no-op. It then runs plan, retrieve, act, verify, and repeats until the verifier passes or the token budget is gone. Retrieval is a stub until task 5.
+
+Each step writes one `steps` row and one `events` row in a single transaction, both keyed on `(run_id, seq)` with `ON CONFLICT DO NOTHING`. A worker that dies and is replaced repeats the same seq and writes nothing twice.
+
+```
+tests/test_idempotent.py::test_only_one_worker_claims_a_run PASSED       [ 11%]
+tests/test_idempotent.py::test_a_repeated_step_writes_one_row_and_one_event PASSED [ 22%]
+tests/test_idempotent.py::test_a_step_and_its_event_are_written_together PASSED [ 33%]
+tests/test_idempotent.py::test_a_later_step_still_writes_after_a_retried_one PASSED [ 44%]
+tests/test_sandbox.py::test_a_correct_solution_passes PASSED             [ 55%]
+tests/test_sandbox.py::test_a_wrong_solution_fails_and_the_output_explains_why PASSED [ 66%]
+tests/test_sandbox.py::test_a_solution_that_does_not_import_fails_rather_than_raising PASSED [ 77%]
+tests/test_sandbox.py::test_a_solution_that_hangs_is_killed_at_the_timeout PASSED [ 88%]
+tests/test_sandbox.py::test_the_sandbox_cannot_open_a_socket PASSED      [100%]
+
+============================== 9 passed in 4.83s ===============================
+```
+
+## Guards
+
+Three numbers are configuration, not code. `TOKEN_BUDGET` is 50000 per run and is counted in the loop. `MAX_RUNS_PER_DAY` is 20 and is counted in the worker from `runs.created_at`, and a refused run still gets its `done` event so a client waiting on the stream is not left hanging. `MODEL` is `claude-haiku-4-5-20251001`, and setting it to `stub` runs the loop with an offline model that needs no key, which is what CI uses so a push costs nothing.
 
 ## Cost
 

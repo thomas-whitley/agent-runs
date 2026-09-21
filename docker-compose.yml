@@ -28,3 +28,18 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  worker:
+    build: .
+    environment:
+      ROLE: worker
+      DATABASE_URL: postgresql://agent:agent@db:5432/agent_runs
+      # The stub model needs no key and costs nothing. Set MODEL and
+      # ANTHROPIC_API_KEY in .env to run the loop against Claude.
+      MODEL: ${MODEL:-stub}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MAX_RUNS_PER_DAY: ${MAX_RUNS_PER_DAY:-20}
+      POLL_SECONDS: "0.5"
+    depends_on:
+      db:
+        condition: service_healthy
