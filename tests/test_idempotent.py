@@ -1,6 +1,6 @@
 """A retried step that already committed must be a no-op."""
 
-from app.runs import claim_run, heartbeat, record_step
+from app.runs import claim_run, finish_run, heartbeat, record_step
 
 
 def new_run(conn, task: str = "make the test pass") -> str:
@@ -126,3 +126,64 @@ def test_a_finished_run_is_never_reclaimed(migrated_db):
     )
 
     assert claim_run(migrated_db, run_id, "worker-b", lease_seconds=60) is False
+
+
+def test_a_worker_that_lost_its_claim_cannot_write_a_step(migrated_db):
+    """A slow model call can outlast the lease. The loser must not keep writing."""
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+    migrated_db.execute(
+        "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
+    )
+    assert claim_run(migrated_db, run_id, "worker-b", lease_seconds=60) is True
+
+    rejected = record_step(
+        migrated_db, run_id, 1, "act", output={"code": "stale"}, worker_id="worker-a"
+    )
+
+    assert rejected is False
+    assert (
+        migrated_db.execute("SELECT count(*) FROM steps WHERE run_id = %s", (run_id,)).fetchone()[0]
+        == 0
+    )
+    assert (
+        migrated_db.execute("SELECT count(*) FROM events WHERE run_id = %s", (run_id,)).fetchone()[
+            0
+        ]
+        == 0
+    )
+
+
+def test_the_new_owner_writes_normally(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-b")
+
+    assert (
+        record_step(migrated_db, run_id, 1, "act", output={"code": "fresh"}, worker_id="worker-b")
+        is True
+    )
+
+
+def test_a_worker_that_lost_its_claim_cannot_finish_the_run(migrated_db):
+    run_id = new_run(migrated_db)
+    claim_run(migrated_db, run_id, "worker-a")
+    migrated_db.execute(
+        "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
+    )
+    claim_run(migrated_db, run_id, "worker-b", lease_seconds=60)
+
+    assert finish_run(migrated_db, run_id, "failed", 999, worker_id="worker-a") is False
+    assert finish_run(migrated_db, run_id, "succeeded", 10, worker_id="worker-b") is True
+
+    row = migrated_db.execute(
+        "SELECT status, tokens_used FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()
+    assert row == ("succeeded", 10), "the loser's status overwrote the owner's"
+
+
+def test_an_unfenced_write_still_works_for_callers_without_a_worker_id(migrated_db):
+    """The tests and any single worker path do not have to pass one."""
+    run_id = new_run(migrated_db)
+
+    assert record_step(migrated_db, run_id, 1, "plan", output={"text": "a"}) is True
+    assert finish_run(migrated_db, run_id, "succeeded", 5) is True

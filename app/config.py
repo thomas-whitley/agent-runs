@@ -24,6 +24,7 @@ class Settings:
     poll_seconds: float
     verify_timeout_seconds: float
     lease_seconds: float
+    model_timeout_seconds: float
     replica_id: str
     voyage_api_key: str | None
     embedding_model: str
@@ -47,6 +48,7 @@ def load_settings() -> Settings:
         poll_seconds=float(os.environ.get("POLL_SECONDS", "1")),
         verify_timeout_seconds=float(os.environ.get("VERIFY_TIMEOUT_SECONDS", "10")),
         lease_seconds=float(os.environ.get("LEASE_SECONDS", "60")),
+        model_timeout_seconds=float(os.environ.get("MODEL_TIMEOUT_SECONDS", "25")),
         replica_id=os.environ.get("REPLICA_ID") or socket.gethostname(),
         voyage_api_key=os.environ.get("VOYAGE_API_KEY") or None,
         embedding_model=os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),

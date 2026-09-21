@@ -47,10 +47,18 @@ class StubModel:
 class AnthropicModel:
     """Claude through the Anthropic SDK. Imported lazily so the stub path needs no SDK."""
 
-    def __init__(self, model: str, api_key: str, max_tokens: int = 2048) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        max_tokens: int = 2048,
+        timeout_seconds: float = 25.0,
+    ) -> None:
         from anthropic import Anthropic
 
-        self._client = Anthropic(api_key=api_key)
+        # Well under LEASE_SECONDS. A call that outlasts the lease means another
+        # worker has taken the run over while this one is still waiting.
+        self._client = Anthropic(api_key=api_key, timeout=timeout_seconds)
         self._model = model
         self._max_tokens = max_tokens
 
@@ -80,11 +88,13 @@ class OpenAICompatibleModel:
         base_url: str | None = None,
         max_tokens: int = 2048,
         client: object | None = None,
+        timeout_seconds: float = 25.0,
     ) -> None:
         if client is None:
             from openai import OpenAI
 
-            client = OpenAI(api_key=api_key, base_url=base_url)
+            # Well under LEASE_SECONDS, for the same reason as the Anthropic client.
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
         self._client = client
         self._model = model
         self._max_tokens = max_tokens

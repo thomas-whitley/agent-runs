@@ -91,3 +91,46 @@ def test_unknown_run_is_not_found(start_server):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "run not found"
+
+
+def test_reconnecting_after_done_closes_instead_of_hanging(start_server, clean_db):
+    """A cursor at the done event must end the stream, not poll Postgres forever.
+
+    Left open it holds a Container Apps replica above zero and breaks scale to
+    zero, which is the thing that makes this free.
+    """
+    import time
+
+    base_url = start_server(keepalive_seconds=0.2)
+    run_id = seed_run(base_url, clean_db, step_count=2)
+
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE runs SET status = 'succeeded', finished_at = now() WHERE id = %s", (run_id,)
+        )
+
+    with httpx2.stream("GET", f"{base_url}/runs/{run_id}/events", timeout=15) as response:
+        events = list(read_sse(response.iter_lines()))
+    last_id = events[-1].id
+
+    # Keepalives keep bytes flowing, so a read timeout never fires. The only way
+    # to see the hang is a wall clock deadline.
+    deadline = time.monotonic() + 5
+    closed = False
+    lines: list[str] = []
+
+    with httpx2.stream(
+        "GET",
+        f"{base_url}/runs/{run_id}/events",
+        headers={"Last-Event-ID": str(last_id)},
+        timeout=10,
+    ) as response:
+        for line in response.iter_lines():
+            lines.append(line)
+            if time.monotonic() > deadline:
+                break
+        else:
+            closed = True
+
+    assert closed, "the stream stayed open after done, sending keepalives forever"
+    assert all(event.id > last_id for event in read_sse(lines))

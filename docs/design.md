@@ -4,7 +4,7 @@
 
 ## The task
 
-A client posts a pytest file. The agent writes the Python function that makes it pass. Verification is pytest's exit code, run in a subprocess with a timeout and no network inside the worker container. That is the whole sandbox. It is a demo sandbox, not a security boundary, and the README says so.
+A client posts a pytest file. The agent writes the Python function that makes it pass. Verification is pytest's exit code, run in a subprocess with a timeout, a scrubbed environment, and both of Python's socket layers disabled. That is a demo guard rather than isolation. The worker container has a network of its own, because it calls the model and Postgres, and the README says exactly that.
 
 The task was chosen because the answer checks itself. The loop either produces a function that passes the tests or it does not, so "keep working until the result holds" has a concrete meaning.
 
@@ -67,7 +67,8 @@ The loop talks to a `Model` protocol with one `complete` method. `MODEL=stub` ru
 - `docker-compose.yml` runs Postgres with pgvector, two api replicas behind nginx on one port, and one worker. This is where the two replica test runs, locally and in CI.
 - `infra/main.bicep` declares a Container Apps environment on the consumption plan, an `api` app at min 0 max 2 replicas scaling on HTTP concurrency, a `worker` app at min 0 max 1 scaling on a KEDA postgresql query over pending runs, and a Log Analytics workspace. There is no database resource; the connection string is a secret.
 - `.github/workflows/ci.yml` runs lint and tests on every push against the compose Postgres with the stub model. `deploy.yml` builds and pushes the image and updates the apps through an OIDC federated credential, with no stored cloud secret. `keepalive.yml` pings the database and the health endpoint daily so a free tier project does not pause.
-- OpenTelemetry instrumentation exports traces to Azure Monitor. The trace id rides on every event payload so a client can quote it.
+- OpenTelemetry instrumentation exports traces to Azure Monitor.
+- Container Apps cuts an HTTP request at 240 seconds on the consumption plan. Keepalives do not extend it and raising it needs paid premium ingress, so a run longer than that has its stream cut and the client reconnects with `Last-Event-ID`.
 
 ## Cost
 

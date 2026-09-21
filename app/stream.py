@@ -21,6 +21,8 @@ WHERE run_id = %s AND id > %s
 ORDER BY id
 """
 
+_IS_FINISHED = "SELECT finished_at IS NOT NULL FROM runs WHERE id = %s"
+
 
 def parse_last_event_id(header: str | None) -> int:
     """A missing or unreadable Last-Event-ID means replay the run from the start."""
@@ -51,6 +53,17 @@ async def event_stream(
         async with pool.connection() as conn:
             cursor = await conn.execute(_SELECT_NEW_EVENTS, (str(run_id), cursor_id))
             rows = await cursor.fetchall()
+
+            if not rows:
+                # A cursor at or past the done event has nothing left coming. The
+                # loop would otherwise poll and send keepalives for as long as the
+                # client waited, which holds a replica above zero. The worker
+                # writes the done event before it sets finished_at, so this cannot
+                # close a stream that still has an event to deliver.
+                cursor = await conn.execute(_IS_FINISHED, (str(run_id),))
+                finished = await cursor.fetchone()
+                if finished and finished[0]:
+                    return
 
         if rows:
             idle_seconds = 0.0

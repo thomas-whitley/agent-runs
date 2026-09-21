@@ -138,6 +138,7 @@ def settings_for_retrieval(voyage_api_key=None):
         poll_seconds=0.05,
         verify_timeout_seconds=10.0,
         lease_seconds=60.0,
+        model_timeout_seconds=25.0,
         replica_id="replica-test",
         voyage_api_key=voyage_api_key,
         embedding_model="voyage-3",

@@ -13,7 +13,7 @@ import psycopg
 
 from app.model import Model, ModelReply, extract_code
 from app.retrieval import DEFAULT_LIMIT, Retriever
-from app.runs import record_step
+from app.runs import finish_run, record_step
 from app.sandbox import DEFAULT_TIMEOUT_SECONDS, verify
 
 DEFAULT_TOKEN_BUDGET = 50_000
@@ -22,6 +22,11 @@ DEFAULT_MODEL_RETRY_ATTEMPTS = 4
 DEFAULT_MODEL_RETRY_BACKOFF_SECONDS = 2.0
 
 logger = logging.getLogger("agent_runs.loop")
+
+
+class ClaimLost(Exception):
+    """Raised when the run was taken over while this worker was still on it."""
+
 
 SYSTEM_PROMPT = (
     "You write one Python module named solution.py. "
@@ -101,8 +106,9 @@ def run_agent_loop(
     verify_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     model_retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
     model_retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
-    on_step: Callable[[], None] | None = None,
+    on_step: Callable[[], bool] | None = None,
     retriever: Retriever | None = None,
+    worker_id: str | None = None,
 ) -> LoopResult:
     test_code, tokens_used = conn.execute(
         "SELECT task, tokens_used FROM runs WHERE id = %s", (run_id,)
@@ -117,38 +123,50 @@ def run_agent_loop(
     ).fetchone()
 
     def progress() -> None:
-        if on_step is not None:
-            on_step()
+        """Report that a step landed, and stop if the run is no longer ours."""
+        if on_step is not None and on_step() is False:
+            raise ClaimLost(run_id)
+
+    def write(step_seq: int, kind: str, output: dict, tokens: int = 0) -> None:
+        written = record_step(
+            conn, run_id, step_seq, kind, output=output, tokens=tokens, worker_id=worker_id
+        )
+        if not written and worker_id is not None:
+            # Either the seq was already committed by us, or we no longer own the
+            # run. Checking ownership tells the two apart.
+            owner = conn.execute("SELECT claimed_by FROM runs WHERE id = %s", (run_id,)).fetchone()
+            if owner is None or owner[0] != worker_id:
+                raise ClaimLost(run_id)
 
     # Retrieval runs on a resume too, so the replacement worker prompts with the
     # same notes. Only the step record is skipped, because it already exists.
     chunks = retriever.search(conn, test_code, limit=DEFAULT_LIMIT) if retriever else []
-
-    if seq == 0:
-        seq += 1
-        record_step(
-            conn, run_id, seq, "plan", output={"text": "write solution.py, then run pytest"}
-        )
-        progress()
-
-        seq += 1
-        record_step(
-            conn,
-            run_id,
-            seq,
-            "retrieve",
-            output={"chunks": [{"id": chunk.id, "source": chunk.source} for chunk in chunks]},
-        )
-        progress()
 
     status = "budget_exhausted"
     error_message: str | None = None
     prompt = _first_prompt(test_code, _context_block(chunks))
 
     try:
+        if seq == 0:
+            seq += 1
+            write(seq, "plan", {"text": "write solution.py, then run pytest"})
+            progress()
+
+            seq += 1
+            write(
+                seq,
+                "retrieve",
+                {"chunks": [{"id": chunk.id, "source": chunk.source} for chunk in chunks]},
+            )
+            progress()
+
         while attempts < max_attempts:
             if tokens_used >= token_budget:
                 break
+
+            # Refresh the lease before a call that may take a while, and find
+            # out here rather than after it if the run is no longer ours.
+            progress()
 
             reply = _complete_with_retry(
                 model,
@@ -162,18 +180,16 @@ def run_agent_loop(
             code = extract_code(reply.text)
 
             seq += 1
-            record_step(conn, run_id, seq, "act", output={"code": code}, tokens=reply.tokens)
+            write(seq, "act", {"code": code}, tokens=reply.tokens)
             progress()
 
             result = verify(code, test_code, timeout_seconds=verify_timeout_seconds)
 
             seq += 1
-            record_step(
-                conn,
-                run_id,
+            write(
                 seq,
                 "verify",
-                output={
+                {
                     "passed": result.passed,
                     "timed_out": result.timed_out,
                     "output": result.output,
@@ -188,6 +204,11 @@ def run_agent_loop(
             prompt = _retry_prompt(test_code, code, result.output)
         else:
             status = "failed"
+    except ClaimLost:
+        # Another worker owns this run now. It will finish it, and anything this
+        # one writes from here would be writing over the owner.
+        logger.warning("run %s was taken over, stopping without writing", run_id)
+        return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
     except Exception as error:
         # A run must never be left claimed and running with a stream that never
         # ends. Close it, and let the worker carry on to the next one.
@@ -200,11 +221,14 @@ def run_agent_loop(
         done_output["error"] = error_message
 
     seq += 1
-    record_step(conn, run_id, seq, "done", output=done_output)
+    try:
+        write(seq, "done", done_output)
+    except ClaimLost:
+        logger.warning("run %s was taken over before it could be closed", run_id)
+        return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
 
-    conn.execute(
-        "UPDATE runs SET status = %s, tokens_used = %s, finished_at = now() WHERE id = %s",
-        (status, tokens_used, run_id),
-    )
+    if not finish_run(conn, run_id, status, tokens_used, worker_id=worker_id):
+        logger.warning("run %s was taken over, its final status was not written", run_id)
+        return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
 
     return LoopResult(status=status, attempts=attempts, tokens_used=tokens_used)

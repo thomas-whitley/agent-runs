@@ -32,7 +32,7 @@ uv run pytest
 | Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | green |
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | green, by full text search |
-| Deployed to Azure Container Apps by GitHub Actions with OIDC, traced end to end | `.github/workflows/deploy.yml` | pending |
+| Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` | green |
 
 ## Resume, and the test that proves it
 
@@ -159,7 +159,9 @@ still counts against the budget. `tests/test_idempotent.py` and
 
 ## What the agent does
 
-You post a pytest file. The agent writes the function that makes it pass, running pytest in a subprocess with a timeout and no network inside the worker container. That is the whole sandbox, and it is a demo sandbox, not a security boundary.
+You post a pytest file. The agent writes the function that makes it pass. Verification is pytest's exit code, run in a subprocess with a timeout, a scrubbed environment so no key reaches the generated code, and both of Python's socket layers disabled.
+
+That is a demo guard, not isolation, and the difference matters. The worker container itself has a network, because it calls the model and Postgres. Disabling `socket` and `_socket` stops generated code reaching out by accident, and `tests/test_sandbox.py` asserts that both a plain `socket.create_connection` and a raw `import _socket` fail. It would not stop code written to get out.
 
 The subprocess starts with the socket module replaced, so the code under verification cannot open a connection. `tests/test_sandbox.py` asserts that a test which calls `socket.create_connection` fails, that a solution which loops forever is killed at the timeout, and that a wrong answer comes back with pytest's output rather than an exception.
 
@@ -229,6 +231,50 @@ docs were in the corpus first, as the spec asked. They crowded the standard
 library notes out, because they are full of the same words a pytest file uses
 while saying nothing about how to write Python. The corpus is reference material
 only now, and the spec records why.
+
+## Live on Azure
+
+Deployed by GitHub Actions with an OIDC federated credential, so there is no
+stored cloud secret. The workflow runs the two replica test against compose,
+pushes the image to GHCR, deploys the Bicep, and polls the live health endpoint
+through a cold start.
+
+A run posted to the deployed service, streamed over SSE from Container Apps:
+
+```
+--- plan (seq 1)
+--- retrieve (seq 2)
+--- act (seq 3) ---
+from functools import reduce
+
+
+def initials(name: str) -> str:
+    """Return the initials of a name in the format 'X.Y.'."""
+    words = name.split()
+    return reduce(lambda acc, word: acc + f"{word[0].upper()}.", words, "")
+--- verify (seq 4): passed=True timed_out=False
+=== done: succeeded after 1 attempt(s) ===
+```
+
+That run finished in one attempt on 223 tokens. The retrieve step had returned
+this chunk, which is why the answer reaches for `functools.reduce` rather than a
+loop:
+
+```
+functools.reduce folds a binary function over an iterable, with an optional initial value.
+```
+
+Both apps scale to zero. The worker starts when there is an unfinished run and
+stops again afterwards. Nothing runs, and nothing is billed, between demos.
+
+### What the ingress does to a long stream
+
+Container Apps cuts any HTTP request at 240 seconds on the consumption plan.
+Keepalives do not extend it, and raising it needs premium ingress, which is paid
+and therefore out of scope here. A run that takes longer than that will have its
+stream cut by the platform, and the client has to reconnect with `Last-Event-ID`
+and carry on, which is exactly the path this repo exists to make work. The
+reconnect is free because the events table is the cursor.
 
 ## A note on free tier quotas
 

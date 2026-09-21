@@ -30,6 +30,7 @@ def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
         poll_seconds=0.05,
         verify_timeout_seconds=10.0,
         lease_seconds=60.0,
+        model_timeout_seconds=25.0,
         replica_id="replica-test",
         voyage_api_key=None,
         embedding_model="voyage-3",
@@ -54,7 +55,9 @@ def test_claim_next_run_returns_none_when_there_is_nothing_to_do(migrated_db):
 
 def test_a_claimed_run_is_processed_to_completion(migrated_db):
     run_id = new_run(migrated_db)
-    claim_next_run(migrated_db, "worker-a")
+    # The same worker id the settings carry, because the loop fences its writes
+    # on the worker that owns the run.
+    claim_next_run(migrated_db, "worker-test")
 
     result = process_run(migrated_db, run_id, StubModel(replies=[CORRECT]), settings_with())
 
@@ -82,7 +85,7 @@ def test_the_daily_limit_refuses_the_run_and_closes_its_stream(migrated_db):
     statuses = []
     for _ in range(3):
         run_id = new_run(migrated_db)
-        claim_next_run(migrated_db, "worker-a")
+        claim_next_run(migrated_db, "worker-test")
         process_run(migrated_db, run_id, model, settings)
         statuses.append(
             migrated_db.execute("SELECT status FROM runs WHERE id = %s", (run_id,)).fetchone()[0]

@@ -57,3 +57,32 @@ def test_network():
 
     assert result.passed is False
     assert "network" in result.output.lower()
+
+
+def test_the_sandbox_cannot_reach_the_raw_socket_module():
+    """Patching socket.socket alone is bypassed by importing _socket directly."""
+    going_under = """
+import _socket
+
+def test_raw_socket():
+    _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+"""
+    result = verify("def add(a, b):\n    return a + b\n", going_under)
+
+    assert result.passed is False
+    assert "network" in result.output.lower()
+
+
+def test_the_sandbox_does_not_inherit_the_parent_environment(monkeypatch):
+    """A key in the worker's environment must not reach generated code."""
+    monkeypatch.setenv("MODEL_API_KEY", "a-secret-that-must-not-leak")
+
+    reading_env = """
+import os
+
+def test_env():
+    assert "MODEL_API_KEY" not in os.environ, "the key reached the sandbox"
+"""
+    result = verify("def add(a, b):\n    return a + b\n", reading_env)
+
+    assert result.passed is True

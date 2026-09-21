@@ -276,3 +276,60 @@ def test_the_loop_still_runs_without_a_retriever(migrated_db):
     result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
 
     assert result.status == "succeeded"
+
+
+def test_the_loop_stops_without_writing_when_its_claim_is_lost(migrated_db):
+    """Losing the lease mid run must not produce a done event from the loser."""
+    from app.runs import claim_run
+
+    run_id = new_run(migrated_db, PASSING_TEST)
+    claim_run(migrated_db, run_id, "worker-a")
+
+    beats = {"count": 0}
+
+    def owned_for_two_steps() -> bool:
+        beats["count"] += 1
+        return beats["count"] < 3
+
+    result = run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        worker_id="worker-a",
+        on_step=owned_for_two_steps,
+    )
+
+    assert result.status == "lost"
+    assert "done" not in event_kinds(migrated_db, run_id), "the loser closed the run"
+
+    row = migrated_db.execute(
+        "SELECT status, finished_at FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()
+    assert row[1] is None, "the loser marked the run finished"
+
+
+def test_the_loop_fences_its_writes_on_the_worker_that_owns_the_run(migrated_db):
+    from app.runs import claim_run
+
+    run_id = new_run(migrated_db, PASSING_TEST)
+    claim_run(migrated_db, run_id, "worker-b")
+
+    result = run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        worker_id="worker-a",
+    )
+
+    assert result.status == "lost", "a worker that never owned the run wrote to it"
+    assert event_kinds(migrated_db, run_id) == []
+
+
+def test_the_loop_still_runs_without_a_worker_id(migrated_db):
+    run_id = new_run(migrated_db, PASSING_TEST)
+
+    result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
+
+    assert result.status == "succeeded"

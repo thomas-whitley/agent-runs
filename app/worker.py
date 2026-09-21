@@ -65,6 +65,8 @@ def process_run(
     retriever: Retriever | None = None,
 ) -> LoopResult | None:
     """Execute one claimed run. None means the daily guard refused it."""
+    # Check then act, which is safe only because the worker runs at one replica
+    # (maxReplicas is 1 in the Bicep). Two workers could both pass this.
     if runs_started_today(conn) > settings.max_runs_per_day:
         logger.warning(
             "refusing run %s: daily limit of %s reached", run_id, settings.max_runs_per_day
@@ -80,6 +82,7 @@ def process_run(
         verify_timeout_seconds=settings.verify_timeout_seconds,
         on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
         retriever=retriever,
+        worker_id=settings.worker_id,
     )
 
 
@@ -95,12 +98,17 @@ def build_model(settings: Settings) -> Model:
             model=settings.model,
             api_key=settings.model_api_key,
             base_url=settings.model_base_url,
+            timeout_seconds=settings.model_timeout_seconds,
         )
 
     if settings.anthropic_api_key:
         from app.model import AnthropicModel
 
-        return AnthropicModel(model=settings.model, api_key=settings.anthropic_api_key)
+        return AnthropicModel(
+            model=settings.model,
+            api_key=settings.anthropic_api_key,
+            timeout_seconds=settings.model_timeout_seconds,
+        )
 
     raise RuntimeError(
         "no model credentials: set MODEL=stub, or MODEL_BASE_URL with MODEL_API_KEY, "
