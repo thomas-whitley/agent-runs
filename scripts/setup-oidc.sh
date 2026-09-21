@@ -25,10 +25,21 @@ if ! az ad sp show --id "$client_id" >/dev/null 2>&1; then
   az ad sp create --id "$client_id" --output none
 fi
 
-# One credential per subject. main covers pushes, and the second covers the
-# manual dispatch that runs from the same branch.
-for subject in "repo:${REPO}:ref:refs/heads/main" "repo:${REPO}:environment:production"; do
-  name="$(printf '%s' "$subject" | tr ':/' '--')"
+# GitHub may present either the plain subject or the immutable one, which
+# embeds the numeric owner and repo ids. Which you get depends on the account,
+# so register both rather than guessing. A mismatch here fails at sign in with
+# AADSTS700213 and nothing else explains why.
+owner="${REPO%%/*}"
+repo_name="${REPO##*/}"
+owner_id="$(gh api "/repos/${REPO}" --jq .owner.id)"
+repo_id="$(gh api "/repos/${REPO}" --jq .id)"
+immutable="repo:${owner}@${owner_id}/${repo_name}@${repo_id}:ref:refs/heads/main"
+
+for subject in \
+    "repo:${REPO}:ref:refs/heads/main" \
+    "repo:${REPO}:environment:production" \
+    "${immutable}"; do
+  name="$(printf '%s' "$subject" | tr ':/@' '---' | cut -c1-120)"
   if ! az ad app federated-credential list --id "$client_id" \
         --query "[?subject=='${subject}']" --output tsv | grep -q .; then
     az ad app federated-credential create --id "$client_id" --parameters "{
