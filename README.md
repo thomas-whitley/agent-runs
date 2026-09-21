@@ -63,6 +63,47 @@ data: {"kind": "done", "status": "succeeded"}
 Nothing about a connected client is held in the server. The events table is the
 whole cursor, which is what lets a reconnect land on any replica.
 
+### The same thing against a real run
+
+Posting a task, dropping the connection part way through, and reconnecting. The
+agent is Gemini 3.8 Flash on its free tier. Steps 1 to 3 arrive while the client
+is connected, the client drops the socket, the verify step runs with nobody
+listening, and the reconnect asks for everything after event 3.
+
+```
+run: 0d33b20c-1686-4827-a038-8af2724cbff7
+[first pass] HTTP 200, Last-Event-ID sent: None
+[first pass] event id=1 kind=plan seq=1
+[first pass] event id=2 kind=retrieve seq=2
+[first pass] event id=3 kind=act seq=3
+[first pass] >>> connection dropped after 3 events
+
+... steps continue on the server with nobody listening ...
+
+[after reconnect] HTTP 200, Last-Event-ID sent: 3
+[after reconnect] event id=4 kind=verify seq=4
+[after reconnect] event id=5 kind=done seq=5
+```
+
+Events 4 and 5 arrive once each and nothing is repeated. The run finished
+`succeeded` in one attempt, 167 tokens, 14.8 seconds, having written this from
+the supplied pytest file alone:
+
+```python
+import re
+
+
+def tokenise(text: str) -> list[str]:
+    return re.findall(r"\w+|[^\w\s]", text)
+```
+
+### What a run costs
+
+Measured on the two runs above, both solved on the first attempt: 167 and 325
+tokens, 14.8 and 22.6 seconds. The per run budget is 50000 tokens, so the cap is
+far above what the demo task needs. It exists for the case where the agent keeps
+failing and retrying.
+
 ## What the agent does
 
 You post a pytest file. The agent writes the function that makes it pass, running pytest in a subprocess with a timeout and no network inside the worker container. That is the whole sandbox, and it is a demo sandbox, not a security boundary.
@@ -71,7 +112,9 @@ The subprocess starts with the socket module replaced, so the code under verific
 
 ## The worker and the loop
 
-The worker claims a run with one `UPDATE ... WHERE claimed_by IS NULL`, so two workers racing for the same run produce one winner and one no-op. It then runs plan, retrieve, act, verify, and repeats until the verifier passes or the token budget is gone. Retrieval is a stub until task 5.
+The worker claims a run with one `UPDATE ... WHERE claimed_by IS NULL`, so two workers racing for the same run produce one winner and one no-op.
+
+A model provider returning an error must not take the worker down with it. A failed call is retried with a growing wait, and a run that still cannot finish is closed with a `done` event carrying `status: error`, so a client waiting on the stream is not left hanging. This was not theoretical: the first live run against Gemini hit a 503, the worker had no handler, and the container died leaving the run claimed and its stream open forever. It then runs plan, retrieve, act, verify, and repeats until the verifier passes or the token budget is gone. Retrieval is a stub until task 5.
 
 Each step writes one `steps` row and one `events` row in a single transaction, both keyed on `(run_id, seq)` with `ON CONFLICT DO NOTHING`. A worker that dies and is replaced repeats the same seq and writes nothing twice.
 

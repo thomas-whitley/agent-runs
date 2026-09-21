@@ -31,6 +31,7 @@ services:
 
   worker:
     build: .
+    restart: unless-stopped
     environment:
       ROLE: worker
       DATABASE_URL: postgresql://agent:agent@db:5432/agent_runs

@@ -102,12 +102,18 @@ def main() -> None:  # pragma: no cover - the process entry point
 
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
         while True:
-            run_id = claim_next_run(conn, settings.worker_id)
-            if run_id is None:
+            try:
+                run_id = claim_next_run(conn, settings.worker_id)
+                if run_id is None:
+                    time.sleep(settings.poll_seconds)
+                    continue
+                logger.info("claimed run %s", run_id)
+                process_run(conn, run_id, model, settings)
+            except Exception:
+                # run_agent_loop already closes a run it could not finish. This
+                # catches everything outside it, so the worker outlives a blip.
+                logger.exception("worker loop error, carrying on")
                 time.sleep(settings.poll_seconds)
-                continue
-            logger.info("claimed run %s", run_id)
-            process_run(conn, run_id, model, settings)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -93,3 +93,80 @@ def test_the_verify_step_records_whether_it_passed(migrated_db):
         "SELECT output FROM steps WHERE run_id = %s AND kind = 'verify'", (run_id,)
     ).fetchone()[0]
     assert output["passed"] is True
+
+
+class FlakyModel:
+    """Raises a transient error a fixed number of times, then answers."""
+
+    def __init__(self, failures: int, reply: str = CORRECT):
+        self.failures = failures
+        self.reply = reply
+        self.calls = 0
+
+    def complete(self, system: str, prompt: str):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise RuntimeError("503 the model is experiencing high demand")
+        from app.model import ModelReply
+
+        return ModelReply(text=self.reply, tokens=100)
+
+
+class AlwaysFailingModel:
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, system: str, prompt: str):
+        self.calls += 1
+        raise RuntimeError("503 the model is experiencing high demand")
+
+
+def test_a_transient_model_error_is_retried(migrated_db):
+    run_id = new_run(migrated_db, PASSING_TEST)
+    model = FlakyModel(failures=2)
+
+    result = run_agent_loop(
+        migrated_db, run_id, model, token_budget=50_000, model_retry_backoff_seconds=0
+    )
+
+    assert result.status == "succeeded"
+    assert model.calls == 3, "the call should have been retried twice before succeeding"
+
+
+def test_a_model_that_keeps_failing_ends_the_run_instead_of_killing_the_worker(migrated_db):
+    run_id = new_run(migrated_db, PASSING_TEST)
+    model = AlwaysFailingModel()
+
+    result = run_agent_loop(
+        migrated_db, run_id, model, token_budget=50_000, model_retry_backoff_seconds=0
+    )
+
+    assert result.status == "error"
+
+    row = migrated_db.execute(
+        "SELECT status, finished_at IS NOT NULL FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()
+    assert row == ("error", True), "a run that errored must not be left claimed and running"
+
+    payload = migrated_db.execute(
+        "SELECT payload FROM events WHERE run_id = %s ORDER BY seq DESC LIMIT 1", (run_id,)
+    ).fetchone()[0]
+    assert payload["kind"] == "done", "an errored run must still close its stream"
+    assert payload["output"]["status"] == "error"
+    assert "high demand" in payload["output"]["error"]
+
+
+def test_a_failing_model_is_not_retried_forever(migrated_db):
+    run_id = new_run(migrated_db, PASSING_TEST)
+    model = AlwaysFailingModel()
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        model,
+        token_budget=50_000,
+        model_retry_attempts=3,
+        model_retry_backoff_seconds=0,
+    )
+
+    assert model.calls == 3

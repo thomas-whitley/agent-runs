@@ -4,16 +4,22 @@ The run's task text is the pytest file the client posted. The agent writes
 solution.py until that file passes, or until the token budget is gone.
 """
 
+import logging
+import time
 from dataclasses import dataclass
 
 import psycopg
 
-from app.model import Model, extract_code
+from app.model import Model, ModelReply, extract_code
 from app.runs import record_step
 from app.sandbox import DEFAULT_TIMEOUT_SECONDS, verify
 
 DEFAULT_TOKEN_BUDGET = 50_000
 DEFAULT_MAX_ATTEMPTS = 10
+DEFAULT_MODEL_RETRY_ATTEMPTS = 4
+DEFAULT_MODEL_RETRY_BACKOFF_SECONDS = 2.0
+
+logger = logging.getLogger("agent_runs.loop")
 
 SYSTEM_PROMPT = (
     "You write one Python module named solution.py. "
@@ -42,6 +48,37 @@ def _retry_prompt(test_code: str, code: str, failure: str) -> str:
     )
 
 
+def _complete_with_retry(
+    model: Model,
+    system: str,
+    prompt: str,
+    attempts: int,
+    backoff_seconds: float,
+) -> ModelReply:
+    """Model providers return transient errors. Retry before giving up on the run."""
+    last_error: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return model.complete(system=system, prompt=prompt)
+        except Exception as error:  # the provider's exception types are its own
+            last_error = error
+            if attempt == attempts:
+                break
+            wait = backoff_seconds * attempt
+            logger.warning(
+                "model call failed (attempt %s of %s), retrying in %ss: %s",
+                attempt,
+                attempts,
+                wait,
+                error,
+            )
+            if wait:
+                time.sleep(wait)
+
+    raise RuntimeError(f"the model failed {attempts} times: {last_error}") from last_error
+
+
 def run_agent_loop(
     conn: psycopg.Connection,
     run_id: str,
@@ -50,6 +87,8 @@ def run_agent_loop(
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     verify_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    model_retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
+    model_retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
 ) -> LoopResult:
     test_code = conn.execute("SELECT task FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
 
@@ -64,45 +103,63 @@ def run_agent_loop(
     record_step(conn, run_id, seq, "retrieve", output={"chunks": []})
 
     status = "budget_exhausted"
+    error_message: str | None = None
     prompt = _first_prompt(test_code)
 
-    while attempts < max_attempts:
-        if tokens_used >= token_budget:
-            break
+    try:
+        while attempts < max_attempts:
+            if tokens_used >= token_budget:
+                break
 
-        reply = model.complete(system=SYSTEM_PROMPT, prompt=prompt)
-        tokens_used += reply.tokens
-        attempts += 1
-        code = extract_code(reply.text)
+            reply = _complete_with_retry(
+                model,
+                SYSTEM_PROMPT,
+                prompt,
+                attempts=model_retry_attempts,
+                backoff_seconds=model_retry_backoff_seconds,
+            )
+            tokens_used += reply.tokens
+            attempts += 1
+            code = extract_code(reply.text)
 
-        seq += 1
-        record_step(conn, run_id, seq, "act", output={"code": code}, tokens=reply.tokens)
+            seq += 1
+            record_step(conn, run_id, seq, "act", output={"code": code}, tokens=reply.tokens)
 
-        result = verify(code, test_code, timeout_seconds=verify_timeout_seconds)
+            result = verify(code, test_code, timeout_seconds=verify_timeout_seconds)
 
-        seq += 1
-        record_step(
-            conn,
-            run_id,
-            seq,
-            "verify",
-            output={
-                "passed": result.passed,
-                "timed_out": result.timed_out,
-                "output": result.output,
-            },
-        )
+            seq += 1
+            record_step(
+                conn,
+                run_id,
+                seq,
+                "verify",
+                output={
+                    "passed": result.passed,
+                    "timed_out": result.timed_out,
+                    "output": result.output,
+                },
+            )
 
-        if result.passed:
-            status = "succeeded"
-            break
+            if result.passed:
+                status = "succeeded"
+                break
 
-        prompt = _retry_prompt(test_code, code, result.output)
-    else:
-        status = "failed"
+            prompt = _retry_prompt(test_code, code, result.output)
+        else:
+            status = "failed"
+    except Exception as error:
+        # A run must never be left claimed and running with a stream that never
+        # ends. Close it, and let the worker carry on to the next one.
+        logger.exception("run %s failed", run_id)
+        status = "error"
+        error_message = str(error)
+
+    done_output: dict[str, object] = {"status": status, "attempts": attempts}
+    if error_message is not None:
+        done_output["error"] = error_message
 
     seq += 1
-    record_step(conn, run_id, seq, "done", output={"status": status, "attempts": attempts})
+    record_step(conn, run_id, seq, "done", output=done_output)
 
     conn.execute(
         "UPDATE runs SET status = %s, tokens_used = %s, finished_at = now() WHERE id = %s",
