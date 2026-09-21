@@ -67,7 +67,15 @@ The loop talks to a `Model` protocol with one `complete` method. `MODEL=stub` ru
 - `docker-compose.yml` runs Postgres with pgvector, two api replicas behind nginx on one port, and one worker. This is where the two replica test runs, locally and in CI.
 - `infra/main.bicep` declares a Container Apps environment on the consumption plan, an `api` app at min 0 max 2 replicas scaling on HTTP concurrency, a `worker` app at min 0 max 1 scaling on a KEDA postgresql query over pending runs, and a Log Analytics workspace. There is no database resource; the connection string is a secret.
 - `.github/workflows/ci.yml` runs lint and tests on every push against the compose Postgres with the stub model. `deploy.yml` builds and pushes the image and updates the apps through an OIDC federated credential, with no stored cloud secret. `keepalive.yml` pings the database and the health endpoint daily so a free tier project does not pause.
-- OpenTelemetry instrumentation exports traces to Azure Monitor.
+- OpenTelemetry is configured in the api and exports to Azure Monitor, but nothing
+  useful is traced yet and the repo does not claim otherwise. Checked against the
+  live deployment on 2026-09-21: the only rows in Application Insights are the
+  Azure Monitor SDK fetching its own configuration. There are no `requests` rows,
+  because `FastAPIInstrumentor.instrument_app` runs inside the lifespan, after
+  Starlette has built its middleware stack. The worker never calls
+  `configure_telemetry` at all, so the half of the system that runs the agent loop
+  emits nothing. `cloud_RoleName` is `unknown_service` because no service name is
+  set. Until those three are fixed, nothing here is traced end to end.
 - Container Apps cuts an HTTP request at 240 seconds on the consumption plan. Keepalives do not extend it and raising it needs paid premium ingress, so a run longer than that has its stream cut and the client reconnects with `Last-Event-ID`.
 
 ## Cost

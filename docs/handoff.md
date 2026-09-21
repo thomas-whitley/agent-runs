@@ -35,7 +35,32 @@ Nothing is half written. Two loose ends, both decisions rather than code:
    not yet decided whether to change `CLAUDE.md`. Do not "fix" the README back to
    match it without asking.
 
-2. **Task 5's Voyage path is unproven.** `VOYAGE_API_KEY` is empty, so retrieval runs
+2. **Tracing is configured but traces nothing.** Verified against the live
+   deployment on 2026-09-21. The exporter works and reaches Azure Monitor, but the
+   only rows in Application Insights are the SDK fetching its own configuration.
+   Three separate faults: `FastAPIInstrumentor.instrument_app` is called inside the
+   lifespan in `app/main.py`, which is after Starlette builds its middleware stack,
+   so there are no `requests` rows; `app/worker.py` never calls
+   `configure_telemetry`, so the agent loop emits nothing; and no service name is
+   set, so `cloud_RoleName` is `unknown_service`. The draft CV bullet ends "traced
+   end to end" and **that phrase cannot ship until this is fixed**. The README
+   claims row deliberately says only "Deployed to Azure Container Apps by GitHub
+   Actions with OIDC".
+
+   The fix is roughly: move `instrument_app` into `create_app()` after the routes
+   are added, call `configure_telemetry()` from the worker's `main()`, and set
+   `OTEL_SERVICE_NAME` per role in the Bicep. Then redeploy, post a run, and
+   confirm a single trace carries two `cloud_RoleName` values. Query without the
+   broken az extension:
+
+   ```
+   az rest --method post \
+     --url "https://api.applicationinsights.io/v1/apps/154a7510-caa6-4649-b858-ba28d5b21abd/query" \
+     --resource "https://api.applicationinsights.io" \
+     --body '{"query":"union requests, dependencies | where timestamp > ago(1h) | summarize count() by itemType, cloud_RoleName"}'
+   ```
+
+3. **Task 5's Voyage path is unproven.** `VOYAGE_API_KEY` is empty, so retrieval runs
    on Postgres full text search. The pgvector path is implemented and tested against a
    real database with an offline embedder, so only the embedding provider is unproven.
    The README says "retrieval", not "vector", deliberately. If a Voyage key appears,
