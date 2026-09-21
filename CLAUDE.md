@@ -15,7 +15,7 @@ A FastAPI agent loop that streams its steps over SSE and resumes after a dropped
 - Nothing from my employer, its codebase, customers or tickets appears in this repo, in any form. This is a personal project.
 - No paid cloud resource without me saying yes in the conversation. Target is $0 a month idle: Container Apps free grant, Supabase free plan, GitHub free tier. No custom domain, no paid Postgres, no Redis, no static IP.
 - Secrets live in GitHub Actions secrets and Container Apps secrets, never in the repo, never in a commit message, never in a log line. `.env` is gitignored.
-- The agent's sandbox is a subprocess with a timeout and no network inside the worker container. The README says exactly that. Do not describe it as more than it is.
+- The agent's sandbox is a subprocess with a timeout, a scrubbed environment and Python's socket layers disabled. It is a demo guard, not isolation; the worker container itself has a network. The README says exactly that. Do not describe it as more than it is.
 - Model defaults: Haiku 4.5, 50k tokens per run, 20 runs a day on the public URL. Config, not code.
 
 ## Writing rules (README, docs, commit messages)
