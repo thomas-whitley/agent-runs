@@ -43,7 +43,7 @@ with a React app, so nothing here is meant to last.
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | green, by full text search |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` | green |
-| A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py` | green |
+| A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context` | green |
 
 ## Resume, and the test that proves it
 
