@@ -92,13 +92,27 @@ The image is built in two stages: a Node stage compiles `web/`, and the Python s
 
 Run metadata (type, provider, executor, status, tokens, duration) is public and shows on the runs page. Event bodies are behind a bearer token. A `public` flag per task type lets `pytest` demo runs show in full. The browser never authenticates: it shows metadata for every run and full events only for public task types, which is why there is no login and no token in any page. Sessions and other clients authenticate with one static bearer token from secrets, rotated by redeploy. Rate limits on the public endpoints are unchanged.
 
+## Observability
+
+Two signals, for two different jobs. Structured logs are what you debug with. Traces are what show the shape of a run.
+
+Every process writes JSON to stdout, which the container environment already ships to the workspace. Logs are deliberately not routed through the telemetry exporter, because they have to work in CI, in local compose and on the self hosted machine, none of which have an exporter configured. Logs must not go dark when tracing is off. A line carries a timestamp, level, logger, message, the run id, the run type, the step sequence, the worker or replica id, and the trace and span ids injected from the current span context. The self hosted worker writes the same fields, minus the trace and span ids it does not have, plus the executor. The field set is defined here so two languages have one place to agree.
+
+Two things never appear in a log line: a task's input body and a model's output. A repo chore's input is an instruction about someone's code and its output is a diff. Tokens and secrets never, as everywhere else.
+
+A run is one trace. The API creates a root span when the run is created and stores the trace context on the run row; the worker restores it before the loop starts, so the spans it produces belong to the same trace rather than a second unrelated one. Each loop step is a child span carrying the step kind, the provider and the tokens, which is about five spans per run. A run taken over by a second worker after a lease expiry stays in the same trace, with a child span marked as a takeover, so the trace shows the first worker's spans stopping abruptly and the second's beginning.
+
+The self hosted check worker stays outside the trace on purpose. Making it a span means shipping an ingestion credential to a machine outside the cloud deployment, for a process that runs two checks a week. It logs with the run id instead, and the API logs the result arriving inside the run's trace, so the trace still shows the check completing. When a check fails it sends back the last fifty lines of its log with the result, so a failure is debuggable from the runs page without touching that machine.
+
+Cost is bounded by the workspace's own daily ingestion cap rather than by sampling, because sampling would hide the runs worth looking at. The cap has a failure mode: once it is hit, ingestion stops for the day, so a task failing in a loop would burn the day's budget exactly when the evidence matters. The answer is that a scheduled task failing three times in a row is suspended until it is resumed from Telegram, which bounds log volume, model spend and notification noise with one mechanism.
+
 ## Tests
 
-Telegram is a fake HTTP server in the test suite that records sent messages and replays button callbacks. GitHub is a public throwaway repo, `mercury-fixture`, that one integration test runs a real chore against, opening and then closing a PR. Python unit tests never touch the network. `web/` is tested with Vitest and React Testing Library against a fake `EventSource`, covering the merge on reconnect and the duplicate id case. `checks/` has fast unit tests with a faked HTTP side and a stubbed Lighthouse call, plus one integration test that runs a real Lighthouse against a locally served page. Everything marked `integration` runs only in the compose job.
+Telegram is a fake HTTP server in the test suite that records sent messages and replays button callbacks. GitHub is a public throwaway repo, `mercury-fixture`, that one integration test runs a real chore against, opening and then closing a PR. Python unit tests never touch the network. Telemetry is tested with an in memory span exporter rather than a real connection string, and one test asserts the OpenTelemetry middleware is actually present in the built middleware stack, because its failure mode is otherwise silent. `web/` is tested with Vitest and React Testing Library against a fake `EventSource`, covering the merge on reconnect and the duplicate id case. `checks/` has fast unit tests with a faked HTTP side and a stubbed Lighthouse call, plus one integration test that runs a real Lighthouse against a locally served page. Everything marked `integration` runs only in the compose job.
 
 ## Claims for this phase
 
-Seven rows join the README's claims table. Each goes green only when a test or a measured log line proves it.
+Eight rows join the README's claims table. Each goes green only when a test or a measured log line proves it.
 
 | Claim | Proof |
 | --- | --- |
@@ -109,9 +123,11 @@ Seven rows join the README's claims table. Each goes green only when a test or a
 | Two task types run on two providers in one deploy | run rows with two provider names |
 | A dropped browser stream resumes from the last event without duplicating rows | Vitest test against a fake `EventSource`, and the live page |
 | A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | integration test exercising the fallback window |
+| One run is one trace across the API and the worker, with the context carried on the run row | in memory span exporter test asserting both share a trace id |
 
 ## Build order
 
+0. Observability first, because every step below adds a process. The four tracing faults, structured logging in both processes, the middleware assertion test and the enabled path test.
 1. Task registry and provider per type, plus `GET /runs` and its serializer. `pytest` keeps working.
 2. Scheduled Job in Bicep, the `site_check` type, the three claim endpoints and the `checks/` worker. First claim green.
 3. Telegram webhook, `chat`, progress messages. Cold start measured.
