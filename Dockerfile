@@ -14,6 +14,7 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY app ./app
 COPY migrations ./migrations
 COPY corpus ./corpus
+COPY static ./static
 RUN uv sync --locked --no-dev
 
 ENV PATH="/srv/.venv/bin:$PATH"

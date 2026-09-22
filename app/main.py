@@ -1,8 +1,9 @@
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, field_validator
 
@@ -10,6 +11,8 @@ from app.config import load_settings
 from app.migrations import apply_migrations
 from app.stream import event_stream, parse_last_event_id
 from app.telemetry import configure_telemetry
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 class RunRequest(BaseModel):
@@ -59,6 +62,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/")
+    def demo_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
 
     @app.post("/runs", status_code=201, response_model=RunCreated)
     async def create_run(run: RunRequest, request: Request) -> RunCreated:

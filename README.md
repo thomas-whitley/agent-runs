@@ -24,6 +24,16 @@ uv run ruff check .
 uv run pytest
 ```
 
+## The demo page
+
+`static/index.html` is served at `/`. It posts a task, opens an `EventSource` on
+the run's stream, and prints each event as it arrives. The kill connection
+button calls `close()` on the `EventSource`. The browser's own reconnect logic
+then reopens the connection with `Last-Event-ID` set to the last event id it
+saw, so the resume protocol runs itself with no code in the page for it. One
+static file, 48 lines, no build step. `docs/mercury.md` step 6a replaces it
+with a React app, so nothing here is meant to last.
+
 ## Claims and their proof
 
 | Claim | Test | Status |

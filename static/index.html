@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agent-runs</title>
+<style>
+  body { font-family: monospace; max-width: 40em; margin: 2em auto; }
+  #log { white-space: pre-wrap; border: 1px solid #ccc; padding: 1em; min-height: 8em; }
+</style>
+</head>
+<body>
+<h1>agent-runs</h1>
+<textarea id="task" rows="3" cols="50">make tests/example_test.py pass</textarea><br>
+<button id="start">start run</button>
+<button id="kill" disabled>kill connection</button>
+<pre id="log"></pre>
+<script>
+  let source = null;
+  const log = document.getElementById("log");
+  const write = (line) => { log.textContent += line + "\n"; };
+
+  document.getElementById("start").onclick = async () => {
+    log.textContent = "";
+    const task = document.getElementById("task").value;
+    const res = await fetch("/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task }),
+    });
+    const { id } = await res.json();
+    write(`run: ${id}`);
+    source = new EventSource(`/runs/${id}/events`);
+    document.getElementById("kill").disabled = false;
+    source.addEventListener("step", (e) => write(e.data));
+    source.addEventListener("done", (e) => write(`=== done: ${e.data} ===`));
+    source.onerror = () => write("--- connection lost, reconnecting ---");
+  };
+
+  document.getElementById("kill").onclick = () => {
+    if (source) {
+      source.close();
+      write("--- connection killed ---");
+      document.getElementById("kill").disabled = true;
+    }
+  };
+</script>
+</body>
+</html>
