@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+from collections.abc import Callable
 
 import psycopg
 from opentelemetry import trace
@@ -70,52 +71,6 @@ def _run_type(conn: psycopg.Connection, run_id: str) -> str:
     return conn.execute("SELECT type FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
 
 
-def process_run(
-    conn: psycopg.Connection,
-    run_id: str,
-    model: Model | None,
-    settings: Settings,
-    retriever: Retriever | None = None,
-    tracer: trace.Tracer | None = None,
-) -> LoopResult | None:
-    """Execute one claimed run. None means it was refused rather than run."""
-    # Check then act, which is safe only because the worker runs at one replica
-    # (maxReplicas is 1 in the Bicep). Two workers could both pass this.
-    if runs_started_today(conn) > settings.max_runs_per_day:
-        logger.warning(
-            "refusing run %s: daily limit of %s reached",
-            run_id,
-            settings.max_runs_per_day,
-            extra={"run_id": run_id, "worker_id": settings.worker_id},
-        )
-        refuse_run(conn, run_id, f"daily limit of {settings.max_runs_per_day} runs reached")
-        return None
-
-    task_type_name = _run_type(conn, run_id)
-    if task_type_name not in _RUNNABLE_TYPES:
-        logger.warning(
-            "refusing run %s: task type %s has no executor yet",
-            run_id,
-            task_type_name,
-            extra={"run_id": run_id, "worker_id": settings.worker_id},
-        )
-        refuse_run(conn, run_id, f"task type {task_type_name!r} is not runnable yet")
-        return None
-
-    return run_agent_loop(
-        conn,
-        run_id,
-        model,
-        token_budget=settings.token_budget,
-        verify_timeout_seconds=settings.verify_timeout_seconds,
-        on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
-        retriever=retriever,
-        worker_id=settings.worker_id,
-        tracer=tracer,
-        provider=TASK_TYPES[task_type_name].provider,
-    )
-
-
 def build_model(settings: Settings, provider_name: str) -> Model:
     """Build the model for one registered provider. MODEL=stub skips the registry."""
     if settings.model == "stub":
@@ -148,6 +103,71 @@ def build_model(settings: Settings, provider_name: str) -> Model:
     )
 
 
+def process_run(
+    conn: psycopg.Connection,
+    run_id: str,
+    settings: Settings,
+    retriever: Retriever | None = None,
+    tracer: trace.Tracer | None = None,
+    model_builder: Callable[[Settings, str], Model] = build_model,
+) -> LoopResult | None:
+    """Execute one claimed run. None means it was refused rather than run.
+
+    Building the model happens here, not before the run is claimed, so a
+    provider missing its credentials refuses the one run that needed it
+    instead of leaving it claimed and running with no way to close its
+    stream.
+    """
+    # Check then act, which is safe only because the worker runs at one replica
+    # (maxReplicas is 1 in the Bicep). Two workers could both pass this.
+    if runs_started_today(conn) > settings.max_runs_per_day:
+        logger.warning(
+            "refusing run %s: daily limit of %s reached",
+            run_id,
+            settings.max_runs_per_day,
+            extra={"run_id": run_id, "worker_id": settings.worker_id},
+        )
+        refuse_run(conn, run_id, f"daily limit of {settings.max_runs_per_day} runs reached")
+        return None
+
+    task_type_name = _run_type(conn, run_id)
+    if task_type_name not in _RUNNABLE_TYPES:
+        logger.warning(
+            "refusing run %s: task type %s has no executor yet",
+            run_id,
+            task_type_name,
+            extra={"run_id": run_id, "worker_id": settings.worker_id},
+        )
+        refuse_run(conn, run_id, f"task type {task_type_name!r} is not runnable yet")
+        return None
+
+    task_type = TASK_TYPES[task_type_name]
+    try:
+        model = model_builder(settings, task_type.provider)
+    except RuntimeError as error:
+        logger.error(
+            "refusing run %s: %s",
+            run_id,
+            error,
+            extra={"run_id": run_id, "worker_id": settings.worker_id},
+        )
+        refuse_run(conn, run_id, str(error))
+        return None
+
+    return run_agent_loop(
+        conn,
+        run_id,
+        model,
+        token_budget=settings.token_budget,
+        verify_timeout_seconds=settings.verify_timeout_seconds,
+        on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
+        retriever=retriever,
+        worker_id=settings.worker_id,
+        tracer=tracer,
+        provider=task_type.provider,
+    )
+
+
 def main() -> None:  # pragma: no cover - the process entry point
     configure_logging()
     settings = load_settings()
@@ -158,10 +178,8 @@ def main() -> None:  # pragma: no cover - the process entry point
     retriever = build_retriever(settings)
     models: dict[str, Model] = {}
 
-    def model_for(provider_name: str | None) -> Model | None:
+    def cached_model_builder(settings: Settings, provider_name: str) -> Model:
         """One client per provider, built the first time a run needs it."""
-        if provider_name is None:
-            return None
         if provider_name not in models:
             models[provider_name] = build_model(settings, provider_name)
         return models[provider_name]
@@ -189,9 +207,7 @@ def main() -> None:  # pragma: no cover - the process entry point
                     run_id,
                     extra={"run_id": run_id, "worker_id": settings.worker_id},
                 )
-                task_type = TASK_TYPES.get(_run_type(conn, run_id))
-                provider_name = task_type.provider if task_type else None
-                process_run(conn, run_id, model_for(provider_name), settings, retriever)
+                process_run(conn, run_id, settings, retriever, model_builder=cached_model_builder)
             except Exception:
                 # run_agent_loop already closes a run it could not finish. This
                 # catches everything outside it, so the worker outlives a blip.

@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 
 DEFAULT_DATABASE_URL = "postgresql://agent:agent@localhost:5432/agent_runs"
+# Settings.model no longer names which model runs; PROVIDERS does that per
+# provider. This default only has to be something other than "stub".
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_EMBEDDING_MODEL = "voyage-3"
 

@@ -359,9 +359,9 @@ with `status: error` rather than hanging, which is what the error path is for.
 
 ## Guards
 
-Three numbers are configuration, not code. `TOKEN_BUDGET` is 50000 per run and is counted in the loop. `MAX_RUNS_PER_DAY` is 20 and is counted in the worker from `runs.created_at`, and a refused run still gets its `done` event so a client waiting on the stream is not left hanging. `MODEL` chooses the model, and setting it to `stub` runs the loop with an offline model that needs no key, which is what CI uses so a push costs nothing.
+Three numbers are configuration, not code. `TOKEN_BUDGET` is 50000 per run and is counted in the loop. `MAX_RUNS_PER_DAY` is 20 and is counted in the worker from `runs.created_at`, and a refused run still gets its `done` event so a client waiting on the stream is not left hanging. `MODEL=stub` runs the loop with an offline model that needs no key, which is what CI uses so a push costs nothing.
 
-The loop talks to a `Model` protocol with one `complete` method, so the provider is configuration. `MODEL=stub` is offline. Setting `MODEL_BASE_URL` and `MODEL_API_KEY` uses any endpoint speaking the OpenAI chat completions format, which covers the Gemini free tier at `https://generativelanguage.googleapis.com/v1beta/openai/`. Setting `ANTHROPIC_API_KEY` uses the Anthropic SDK. With none of them set the worker refuses to start and says which one to set. `.env.example` lists all of it.
+The loop talks to a `Model` protocol with one `complete` method. As of Mercury step 1 the provider is no longer read from `MODEL`: each task type in `app/tasks.py` names a provider, and `PROVIDERS` in `app/config.py` maps that name to a kind, a base URL, a model, and the env var holding its key. `pytest` names `gemini`, whose key is `MODEL_API_KEY`; the registry also carries `haiku`, whose key is `ANTHROPIC_API_KEY`, for the task types Mercury adds later. A run whose provider has no key configured is refused, the same way a run past the daily limit is, so its stream closes with `status: refused` rather than staying claimed forever. `.env.example` lists both key variables.
 
 ## Cost
 

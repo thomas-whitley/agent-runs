@@ -16,6 +16,11 @@ def test_add():
 CORRECT = "```python\ndef add(a, b):\n    return a + b\n```"
 
 
+def stub_model_builder(reply: str = CORRECT):
+    """A model_builder that ignores the provider and always returns the same stub."""
+    return lambda settings, provider_name: StubModel(replies=[reply])
+
+
 def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
     defaults = dict(
         database_url="unused",
@@ -56,7 +61,7 @@ def test_a_claimed_run_is_processed_to_completion(migrated_db):
     # on the worker that owns the run.
     claim_next_run(migrated_db, "worker-test")
 
-    result = process_run(migrated_db, run_id, StubModel(replies=[CORRECT]), settings_with())
+    result = process_run(migrated_db, run_id, settings_with(), model_builder=stub_model_builder())
 
     assert result is not None
     assert result.status == "succeeded"
@@ -77,13 +82,12 @@ def test_runs_started_today_ignores_earlier_days(migrated_db):
 
 def test_the_daily_limit_refuses_the_run_and_closes_its_stream(migrated_db):
     settings = settings_with(max_runs_per_day=2)
-    model = StubModel(replies=[CORRECT])
 
     statuses = []
     for _ in range(3):
         run_id = new_run(migrated_db)
         claim_next_run(migrated_db, "worker-test")
-        process_run(migrated_db, run_id, model, settings)
+        process_run(migrated_db, run_id, settings, model_builder=stub_model_builder())
         statuses.append(
             migrated_db.execute("SELECT status FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
         )
@@ -106,11 +110,33 @@ def test_process_run_refuses_a_type_with_no_executor_yet(migrated_db):
     ).fetchone()[0]
     claim_next_run(migrated_db, "worker-test")
 
-    result = process_run(migrated_db, run_id, StubModel(replies=[CORRECT]), settings_with())
+    result = process_run(migrated_db, run_id, settings_with(), model_builder=stub_model_builder())
 
     assert result is None
     status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
     assert status == "refused"
+
+
+def test_process_run_refuses_a_run_when_its_provider_has_no_credentials(migrated_db):
+    """Before this refusal, a missing key left the run claimed and running forever."""
+    run_id = new_run(migrated_db)
+    claim_next_run(migrated_db, "worker-test")
+
+    def failing_builder(settings, provider_name):
+        raise RuntimeError(f"no model credentials: set {provider_name}_KEY")
+
+    result = process_run(migrated_db, run_id, settings_with(), model_builder=failing_builder)
+
+    assert result is None
+    status, payload = migrated_db.execute(
+        "SELECT r.status, e.payload FROM runs r "
+        "JOIN events e ON e.run_id = r.id "
+        "WHERE r.id = %s ORDER BY e.seq DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    assert status == "refused"
+    assert payload["kind"] == "done", "a refused run must still close its stream"
+    assert "no model credentials" in payload["output"]["reason"]
 
 
 def test_build_model_returns_the_stub_when_the_model_is_stub():
@@ -182,7 +208,7 @@ def test_processing_a_run_refreshes_its_heartbeat(migrated_db):
         "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s", (run_id,)
     )
 
-    process_run(migrated_db, run_id, StubModel(replies=[CORRECT]), settings_with())
+    process_run(migrated_db, run_id, settings_with(), model_builder=stub_model_builder())
 
     age = migrated_db.execute(
         "SELECT extract(epoch from (now() - heartbeat_at)) FROM runs WHERE id = %s", (run_id,)
@@ -203,9 +229,9 @@ def test_process_run_gives_the_loop_its_retriever(migrated_db):
     process_run(
         migrated_db,
         run_id,
-        StubModel(replies=[CORRECT]),
         settings_with(),
         retriever=TextRetriever(),
+        model_builder=stub_model_builder(),
     )
 
     output = migrated_db.execute(
