@@ -1,0 +1,65 @@
+# Sample Mercury config. The public image reads one file like this, mounted at
+# /config/mercury.yaml. Copy it into a private repo, fill in the values, and never
+# put a secret here: secrets come from the environment (see the list at the bottom).
+
+telegram:
+  chat_id: 0            # the one chat the bot answers; everyone else gets silence
+  timezone: Australia/Melbourne
+
+providers:
+  gemini:
+    kind: openai_compatible
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    model: gemini-2.5-flash
+    api_key_env: GEMINI_API_KEY
+  haiku:
+    kind: anthropic
+    model: claude-haiku-4-5-20251001
+    api_key_env: ANTHROPIC_API_KEY
+
+tasks:
+  pytest:
+    provider: gemini
+    budget_tokens: 50000
+    public: true
+  chat:
+    provider: haiku
+    budget_tokens: 20000
+  repo_chore:
+    provider: haiku
+    budget_tokens: 50000
+  site_check:
+    budget_tokens: 0    # no model call
+  digest:
+    provider: gemini
+    budget_tokens: 20000
+
+budgets:
+  per_day_tokens:
+    gemini: 500000
+    haiku: 200000
+  per_month_usd: 5
+
+portfolio:
+  repos:
+    - owner/repo-one
+    - owner/repo-two
+  sites:
+    - https://example.com
+
+schedule:
+  site_uptime: "0 * * * *"      # hourly, plain HTTP
+  ci_watch: "5 * * * *"         # hourly, GitHub Actions API
+  lighthouse: "0 3 * * 1"       # weekly, PageSpeed Insights API
+  dependency_audit: "0 4 * * 1"
+  stale_triage: "0 5 * * 1"
+  digest: "30 7 * * *"          # local time above
+  cleanup: "0 2 * * *"          # event bodies older than 30 days
+
+retention:
+  event_bodies_days: 30
+  runs_days: 365
+
+# Environment variables the image expects, all secrets:
+#   DATABASE_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, MERCURY_BEARER_TOKEN,
+#   MERCURY_GITHUB_TOKEN, GEMINI_API_KEY, ANTHROPIC_API_KEY
