@@ -7,6 +7,7 @@ service knows or cares which it is.
 import logging
 import os
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
@@ -67,15 +68,34 @@ def start_run_trace(tracer: trace.Tracer | None = None) -> str | None:
     return carrier.get("traceparent")
 
 
-def step_span(trace_context: str | None, kind: str, tracer: trace.Tracer | None = None):
-    """A child span for one loop step, parented on the run's stored trace context.
+def restore_trace_context(trace_context: str | None) -> object | None:
+    """Make the run's stored trace context current, for the life of the loop.
 
-    A run created before tracing existed, or with tracing off, has no stored
-    context; the step then starts its own trace rather than raising.
+    Returns a token for detach_trace_context, or None when there was nothing
+    to restore (tracing was off when the run was created, or the run predates
+    this column). With the context current, every span the loop opens nests
+    under it with no further plumbing, and every log line emitted while it is
+    current carries the run's trace and span ids, which is the whole point:
+    a log line from inside the loop with nothing current cannot be correlated
+    to the run that produced it.
     """
-    parent = (
-        TraceContextTextMapPropagator().extract(carrier={"traceparent": trace_context})
-        if trace_context
-        else None
-    )
-    return (tracer or _tracer).start_as_current_span(f"step.{kind}", context=parent)
+    if not trace_context:
+        return None
+    parent = TraceContextTextMapPropagator().extract(carrier={"traceparent": trace_context})
+    return otel_context.attach(parent)
+
+
+def detach_trace_context(token: object | None) -> None:
+    if token is not None:
+        otel_context.detach(token)
+
+
+def step_span(kind: str, tracer: trace.Tracer | None = None):
+    """A span for one loop step, child of whatever trace context is current."""
+    return (tracer or _tracer).start_as_current_span(f"step.{kind}")
+
+
+def takeover_span(tracer: trace.Tracer | None = None):
+    """A span marking that a second worker is taking over this run's loop,
+    still a child of whatever trace context is current."""
+    return (tracer or _tracer).start_as_current_span("takeover")

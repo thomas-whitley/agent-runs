@@ -291,16 +291,23 @@ reconnect is free because the events table is the cursor.
 
 A run is one trace across both roles, not two unrelated ones. `POST /runs` opens a
 root span and stores its W3C `traceparent` on the run row. The worker restores that
-context before the loop starts, so its five step spans, plan, retrieve, act, verify,
-done, land as children of the api's root span. `OTEL_SERVICE_NAME` is set per role
-in the Bicep, so Application Insights tells the api and the worker apart by
-`cloud_RoleName` instead of showing both as `unknown_service`.
+context as current before the loop starts, not just once per step, so its five step
+spans, plan, retrieve, act, verify, done, each carrying the step kind, the provider,
+and its tokens, land as children of the api's root span, and so does a log line from
+anywhere in the loop, including a failure that writes no step. A run whose lease
+went stale and was picked up by a replacement worker gets one more child span,
+marked as a takeover, so the trace shows where the first worker's spans stop and the
+second's begin. `OTEL_SERVICE_NAME` is set per role in the Bicep, so Application
+Insights tells the api and the worker apart by `cloud_RoleName` instead of showing
+both as `unknown_service`.
 
 ```
-tests/test_telemetry.py::test_instrumenting_at_construction_puts_otel_middleware_in_the_stack PASSED [ 50%]
-tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context PASSED [100%]
+tests/test_telemetry.py::test_instrumenting_at_construction_puts_otel_middleware_in_the_stack PASSED [ 25%]
+tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context PASSED [ 50%]
+tests/test_loop.py::test_a_resumed_run_gets_a_takeover_span_in_the_stored_trace PASSED [ 75%]
+tests/test_loop.py::test_a_failure_log_line_inside_the_loop_carries_the_run_s_trace_id PASSED [100%]
 
-============================== 2 passed in 1.93s ===============================
+============================== 4 passed in 3.78s ===============================
 ```
 
 The first test is the regression that survived one whole session undetected:

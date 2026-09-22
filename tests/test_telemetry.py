@@ -2,7 +2,14 @@
 
 import re
 
-from app.telemetry import configure_telemetry, start_run_trace, step_span
+from app.telemetry import (
+    configure_telemetry,
+    detach_trace_context,
+    restore_trace_context,
+    start_run_trace,
+    step_span,
+    takeover_span,
+)
 
 TRACEPARENT_RE = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 
@@ -60,11 +67,15 @@ def test_start_run_trace_returns_a_valid_traceparent(in_memory_tracer):
     assert TRACEPARENT_RE.match(trace_context)
 
 
-def test_step_span_is_a_child_of_the_stored_trace_context(in_memory_tracer, span_exporter):
+def test_step_span_is_a_child_of_the_restored_trace_context(in_memory_tracer, span_exporter):
     trace_context = start_run_trace(tracer=in_memory_tracer)
 
-    with step_span(trace_context, "plan", tracer=in_memory_tracer):
-        pass
+    token = restore_trace_context(trace_context)
+    try:
+        with step_span("plan", tracer=in_memory_tracer):
+            pass
+    finally:
+        detach_trace_context(token)
 
     spans = span_exporter.get_finished_spans()
     root = next(s for s in spans if s.name == "run")
@@ -72,3 +83,26 @@ def test_step_span_is_a_child_of_the_stored_trace_context(in_memory_tracer, span
 
     assert step.context.trace_id == root.context.trace_id
     assert step.parent.span_id == root.context.span_id
+
+
+def test_restore_trace_context_is_a_no_op_when_there_is_nothing_stored():
+    assert restore_trace_context(None) is None
+    detach_trace_context(None)  # must not raise
+
+
+def test_takeover_span_is_a_child_of_the_restored_trace_context(in_memory_tracer, span_exporter):
+    trace_context = start_run_trace(tracer=in_memory_tracer)
+
+    token = restore_trace_context(trace_context)
+    try:
+        with takeover_span(tracer=in_memory_tracer):
+            pass
+    finally:
+        detach_trace_context(token)
+
+    spans = span_exporter.get_finished_spans()
+    root = next(s for s in spans if s.name == "run")
+    takeover = next(s for s in spans if s.name == "takeover")
+
+    assert takeover.context.trace_id == root.context.trace_id
+    assert takeover.parent.span_id == root.context.span_id

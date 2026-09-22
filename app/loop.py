@@ -16,7 +16,7 @@ from app.model import Model, ModelReply, extract_code
 from app.retrieval import DEFAULT_LIMIT, Retriever
 from app.runs import finish_run, record_step
 from app.sandbox import DEFAULT_TIMEOUT_SECONDS, verify
-from app.telemetry import step_span
+from app.telemetry import detach_trace_context, restore_trace_context, step_span, takeover_span
 
 DEFAULT_TOKEN_BUDGET = 50_000
 DEFAULT_MAX_ATTEMPTS = 10
@@ -112,6 +112,7 @@ def run_agent_loop(
     retriever: Retriever | None = None,
     worker_id: str | None = None,
     tracer: trace.Tracer | None = None,
+    provider: str | None = None,
 ) -> LoopResult:
     test_code, tokens_used, trace_context = conn.execute(
         "SELECT task, tokens_used, trace_context FROM runs WHERE id = %s", (run_id,)
@@ -131,8 +132,10 @@ def run_agent_loop(
             raise ClaimLost(run_id)
 
     def write(step_seq: int, kind: str, output: dict, tokens: int = 0) -> None:
-        with step_span(trace_context, kind, tracer=tracer) as span:
+        with step_span(kind, tracer=tracer) as span:
             span.set_attribute("step.kind", kind)
+            if provider:
+                span.set_attribute("step.provider", provider)
             if tokens:
                 span.set_attribute("step.tokens", tokens)
             written = record_step(
@@ -153,89 +156,117 @@ def run_agent_loop(
     error_message: str | None = None
     prompt = _first_prompt(test_code, _context_block(chunks))
 
+    # Current for the rest of this call, so every span opened below nests under
+    # the run's root span, and every log line emitted below carries its trace
+    # and span ids, including the failure paths that write nothing.
+    context_token = restore_trace_context(trace_context)
     try:
-        if seq == 0:
-            seq += 1
-            write(seq, "plan", {"text": "write solution.py, then run pytest"})
-            progress()
+        try:
+            if seq == 0:
+                seq += 1
+                write(seq, "plan", {"text": "write solution.py, then run pytest"})
+                progress()
 
-            seq += 1
-            write(
-                seq,
-                "retrieve",
-                {"chunks": [{"id": chunk.id, "source": chunk.source} for chunk in chunks]},
+                seq += 1
+                write(
+                    seq,
+                    "retrieve",
+                    {"chunks": [{"id": chunk.id, "source": chunk.source} for chunk in chunks]},
+                )
+                progress()
+            else:
+                # Every call here with steps already on the run is a replacement
+                # worker resuming one the previous holder's lease went stale on:
+                # a single invocation runs its own attempts loop to completion or
+                # exit, so a second invocation only happens after a takeover.
+                with takeover_span(tracer=tracer) as span:
+                    span.set_attribute("takeover.resumed_at_seq", seq)
+
+            while attempts < max_attempts:
+                if tokens_used >= token_budget:
+                    break
+
+                # Refresh the lease before a call that may take a while, and find
+                # out here rather than after it if the run is no longer ours.
+                progress()
+
+                reply = _complete_with_retry(
+                    model,
+                    SYSTEM_PROMPT,
+                    prompt,
+                    attempts=model_retry_attempts,
+                    backoff_seconds=model_retry_backoff_seconds,
+                )
+                tokens_used += reply.tokens
+                attempts += 1
+                code = extract_code(reply.text)
+
+                seq += 1
+                write(seq, "act", {"code": code}, tokens=reply.tokens)
+                progress()
+
+                result = verify(code, test_code, timeout_seconds=verify_timeout_seconds)
+
+                seq += 1
+                write(
+                    seq,
+                    "verify",
+                    {
+                        "passed": result.passed,
+                        "timed_out": result.timed_out,
+                        "output": result.output,
+                    },
+                )
+                progress()
+
+                if result.passed:
+                    status = "succeeded"
+                    break
+
+                prompt = _retry_prompt(test_code, code, result.output)
+            else:
+                status = "failed"
+        except ClaimLost:
+            # Another worker owns this run now. It will finish it, and anything
+            # this one writes from here would be writing over the owner.
+            logger.warning(
+                "run %s was taken over, stopping without writing",
+                run_id,
+                extra={"run_id": run_id, "worker_id": worker_id},
             )
-            progress()
-
-        while attempts < max_attempts:
-            if tokens_used >= token_budget:
-                break
-
-            # Refresh the lease before a call that may take a while, and find
-            # out here rather than after it if the run is no longer ours.
-            progress()
-
-            reply = _complete_with_retry(
-                model,
-                SYSTEM_PROMPT,
-                prompt,
-                attempts=model_retry_attempts,
-                backoff_seconds=model_retry_backoff_seconds,
+            return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
+        except Exception as error:
+            # A run must never be left claimed and running with a stream that
+            # never ends. Close it, and let the worker carry on to the next one.
+            logger.exception(
+                "run %s failed", run_id, extra={"run_id": run_id, "worker_id": worker_id}
             )
-            tokens_used += reply.tokens
-            attempts += 1
-            code = extract_code(reply.text)
+            status = "error"
+            error_message = str(error)
 
-            seq += 1
-            write(seq, "act", {"code": code}, tokens=reply.tokens)
-            progress()
+        done_output: dict[str, object] = {"status": status, "attempts": attempts}
+        if error_message is not None:
+            done_output["error"] = error_message
 
-            result = verify(code, test_code, timeout_seconds=verify_timeout_seconds)
-
-            seq += 1
-            write(
-                seq,
-                "verify",
-                {
-                    "passed": result.passed,
-                    "timed_out": result.timed_out,
-                    "output": result.output,
-                },
+        seq += 1
+        try:
+            write(seq, "done", done_output)
+        except ClaimLost:
+            logger.warning(
+                "run %s was taken over before it could be closed",
+                run_id,
+                extra={"run_id": run_id, "worker_id": worker_id},
             )
-            progress()
+            return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
 
-            if result.passed:
-                status = "succeeded"
-                break
+        if not finish_run(conn, run_id, status, tokens_used, worker_id=worker_id):
+            logger.warning(
+                "run %s was taken over, its final status was not written",
+                run_id,
+                extra={"run_id": run_id, "worker_id": worker_id},
+            )
+            return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
 
-            prompt = _retry_prompt(test_code, code, result.output)
-        else:
-            status = "failed"
-    except ClaimLost:
-        # Another worker owns this run now. It will finish it, and anything this
-        # one writes from here would be writing over the owner.
-        logger.warning("run %s was taken over, stopping without writing", run_id)
-        return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
-    except Exception as error:
-        # A run must never be left claimed and running with a stream that never
-        # ends. Close it, and let the worker carry on to the next one.
-        logger.exception("run %s failed", run_id)
-        status = "error"
-        error_message = str(error)
-
-    done_output: dict[str, object] = {"status": status, "attempts": attempts}
-    if error_message is not None:
-        done_output["error"] = error_message
-
-    seq += 1
-    try:
-        write(seq, "done", done_output)
-    except ClaimLost:
-        logger.warning("run %s was taken over before it could be closed", run_id)
-        return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
-
-    if not finish_run(conn, run_id, status, tokens_used, worker_id=worker_id):
-        logger.warning("run %s was taken over, its final status was not written", run_id)
-        return LoopResult(status="lost", attempts=attempts, tokens_used=tokens_used)
-
-    return LoopResult(status=status, attempts=attempts, tokens_used=tokens_used)
+        return LoopResult(status=status, attempts=attempts, tokens_used=tokens_used)
+    finally:
+        detach_trace_context(context_token)

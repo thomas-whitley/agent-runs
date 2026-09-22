@@ -381,3 +381,89 @@ def test_the_loop_still_writes_spans_when_the_run_has_no_stored_trace_context(mi
     result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
 
     assert result.status == "succeeded"
+
+
+def test_step_spans_carry_the_provider(migrated_db, in_memory_tracer, span_exporter):
+    run_id = new_run(migrated_db, PASSING_TEST)
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        tracer=in_memory_tracer,
+        provider="stub",
+    )
+
+    act_span = next(s for s in span_exporter.get_finished_spans() if s.name == "step.act")
+    assert act_span.attributes["step.provider"] == "stub"
+
+
+def test_a_resumed_run_gets_a_takeover_span_in_the_stored_trace(
+    migrated_db, in_memory_tracer, span_exporter
+):
+    """A run with steps already on it, when a loop call starts, is by
+    construction a replacement worker picking up a stale claim: a single call
+    runs its own attempts to completion or exit, so seq > 0 at entry only
+    happens on a second call."""
+    from app.runs import record_step
+    from app.telemetry import start_run_trace
+
+    trace_context = start_run_trace(tracer=in_memory_tracer)
+    run_id = migrated_db.execute(
+        "INSERT INTO runs (task, trace_context) VALUES (%s, %s) RETURNING id",
+        (PASSING_TEST, trace_context),
+    ).fetchone()[0]
+    record_step(migrated_db, run_id, 1, "plan", output={"text": "a plan"})
+    record_step(migrated_db, run_id, 2, "retrieve", output={"chunks": []})
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        tracer=in_memory_tracer,
+    )
+
+    spans = span_exporter.get_finished_spans()
+    root = next(s for s in spans if s.name == "run")
+    takeover = next(s for s in spans if s.name == "takeover")
+
+    assert takeover.attributes["takeover.resumed_at_seq"] == 2
+    assert takeover.context.trace_id == root.context.trace_id
+    assert takeover.parent.span_id == root.context.span_id
+
+
+def test_a_failure_log_line_inside_the_loop_carries_the_run_s_trace_id(
+    migrated_db, in_memory_tracer, span_exporter, capsys
+):
+    """The whole point of restoring the trace context before the loop starts:
+    a failure that writes no step must still be correlated to its run."""
+    import json
+
+    from app.logging_setup import configure_logging
+    from app.telemetry import start_run_trace
+
+    configure_logging()
+    trace_context = start_run_trace(tracer=in_memory_tracer)
+    run_id = migrated_db.execute(
+        "INSERT INTO runs (task, trace_context) VALUES (%s, %s) RETURNING id",
+        (PASSING_TEST, trace_context),
+    ).fetchone()[0]
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        AlwaysFailingModel(),
+        token_budget=50_000,
+        model_retry_backoff_seconds=0,
+        tracer=in_memory_tracer,
+    )
+
+    root = next(s for s in span_exporter.get_finished_spans() if s.name == "run")
+    expected_trace_id = format(root.context.trace_id, "032x")
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    failure_line = next(line for line in lines if "failed" in line["message"])
+
+    assert failure_line["trace_id"] == expected_trace_id

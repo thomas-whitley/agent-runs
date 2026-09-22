@@ -68,11 +68,15 @@ The loop talks to a `Model` protocol with one `complete` method. `MODEL=stub` ru
 - `infra/main.bicep` declares a Container Apps environment on the consumption plan, an `api` app at min 0 max 2 replicas scaling on HTTP concurrency, a `worker` app at min 0 max 1 scaling on a KEDA postgresql query over pending runs, and a Log Analytics workspace. There is no database resource; the connection string is a secret.
 - `.github/workflows/ci.yml` runs lint and tests on every push against the compose Postgres with the stub model. `deploy.yml` builds and pushes the image and updates the apps through an OIDC federated credential, with no stored cloud secret. `keepalive.yml` pings the database and the health endpoint daily so a free tier project does not pause.
 - A run is one trace across both roles. `POST /runs` opens a root span and stores its
-  W3C `traceparent` on the run row; the worker restores that context before the loop
-  starts, so its five step spans (plan, retrieve, act, verify, done) land as children
-  of the api's root span rather than starting a second, unrelated trace. `NULL` in
-  `trace_context` means tracing was off when the run was created, and a step then
-  starts its own trace rather than raising. `FastAPIInstrumentor.instrument_app` runs
+  W3C `traceparent` on the run row; the worker restores that context as current before
+  the loop starts, so its five step spans (plan, retrieve, act, verify, done), each
+  carrying the step kind, the provider, and its tokens, land as children of the api's
+  root span rather than starting a second, unrelated trace. A run whose lease went
+  stale and was picked up by a replacement worker gets one more child span, marked as
+  a takeover, so the trace shows where the first worker's spans stop and the second's
+  begin. `NULL` in `trace_context` means tracing was off when the run was created, or
+  the run predates the column; a step then starts its own trace rather than raising.
+  `FastAPIInstrumentor.instrument_app` runs
   from `create_app()`, not the lifespan: it works by patching `build_middleware_stack`,
   and Starlette calls that method itself the first time the app receives any ASGI
   scope, including the lifespan startup scope, which is before the lifespan

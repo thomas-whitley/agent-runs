@@ -91,6 +91,7 @@ def process_run(
         retriever=retriever,
         worker_id=settings.worker_id,
         tracer=tracer,
+        provider=settings.model,
     )
 
 
