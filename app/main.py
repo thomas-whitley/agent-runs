@@ -1,6 +1,7 @@
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -11,21 +12,32 @@ from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.migrations import apply_migrations
 from app.stream import event_stream, parse_last_event_id
+from app.tasks import TASK_TYPES
 from app.telemetry import configure_telemetry, start_run_trace
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 class RunRequest(BaseModel):
-    task: str
+    type: str
+    inputs: dict[str, Any]
 
-    @field_validator("task")
+    @field_validator("type")
     @classmethod
-    def task_must_not_be_blank(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("task must not be blank")
-        return stripped
+    def type_must_be_registered(cls, value: str) -> str:
+        if value not in TASK_TYPES:
+            raise ValueError(f"unknown task type {value!r}")
+        return value
+
+    @field_validator("inputs")
+    @classmethod
+    def inputs_must_carry_a_task(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # Every registered type stores its input on the same task column for
+        # now; per type input shapes are future work, not this step's.
+        task = value.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("inputs.task must not be blank")
+        return value
 
 
 class RunCreated(BaseModel):
@@ -70,11 +82,13 @@ def create_app() -> FastAPI:
 
     @app.post("/runs", status_code=201, response_model=RunCreated)
     async def create_run(run: RunRequest, request: Request) -> RunCreated:
+        task_type = TASK_TYPES[run.type]
         trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(
-                "INSERT INTO runs (task, trace_context) VALUES (%s, %s) RETURNING id, status",
-                (run.task, trace_context),
+                "INSERT INTO runs (task, type, provider, trace_context) "
+                "VALUES (%s, %s, %s, %s) RETURNING id, status",
+                (run.inputs["task"].strip(), run.type, task_type.provider, trace_context),
             )
             row = await cursor.fetchone()
         return RunCreated(id=row[0], status=row[1])

@@ -7,7 +7,10 @@ import psycopg
 def test_post_runs_creates_a_pending_run(start_server, clean_db):
     base_url = start_server()
 
-    response = httpx2.post(f"{base_url}/runs", json={"task": "make tests/example_test.py pass"})
+    response = httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "pytest", "inputs": {"task": "make tests/example_test.py pass"}},
+    )
 
     assert response.status_code == 201
     body = response.json()
@@ -16,10 +19,11 @@ def test_post_runs_creates_a_pending_run(start_server, clean_db):
 
     with psycopg.connect(clean_db) as conn:
         row = conn.execute(
-            "SELECT task, status, claimed_by FROM runs WHERE id = %s", (str(run_id),)
+            "SELECT task, type, provider, status, claimed_by FROM runs WHERE id = %s",
+            (str(run_id),),
         ).fetchone()
 
-    assert row == ("make tests/example_test.py pass", "pending", None)
+    assert row == ("make tests/example_test.py pass", "pytest", "gemini", "pending", None)
 
 
 def test_a_run_created_with_tracing_off_stores_no_trace_context(
@@ -29,7 +33,10 @@ def test_a_run_created_with_tracing_off_stores_no_trace_context(
     monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
     base_url = start_server()
 
-    response = httpx2.post(f"{base_url}/runs", json={"task": "make tests/example_test.py pass"})
+    response = httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "pytest", "inputs": {"task": "make tests/example_test.py pass"}},
+    )
     run_id = response.json()["id"]
 
     with psycopg.connect(clean_db) as conn:
@@ -43,9 +50,31 @@ def test_a_run_created_with_tracing_off_stores_no_trace_context(
 def test_post_runs_rejects_an_empty_task(start_server):
     base_url = start_server()
 
-    response = httpx2.post(f"{base_url}/runs", json={"task": "   "})
+    response = httpx2.post(f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "   "}})
 
     assert response.status_code == 422
+
+
+def test_post_runs_rejects_an_unregistered_type(start_server):
+    base_url = start_server()
+
+    response = httpx2.post(f"{base_url}/runs", json={"type": "not_a_type", "inputs": {"task": "x"}})
+
+    assert response.status_code == 422
+
+
+def test_post_runs_stores_the_type_s_registered_provider(start_server, clean_db):
+    base_url = start_server()
+
+    response = httpx2.post(
+        f"{base_url}/runs", json={"type": "digest", "inputs": {"task": "daily summary"}}
+    )
+
+    run_id = response.json()["id"]
+    with psycopg.connect(clean_db) as conn:
+        provider = conn.execute("SELECT provider FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
+
+    assert provider == "gemini"
 
 
 def test_health_reports_ok(start_server):

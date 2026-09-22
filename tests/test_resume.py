@@ -16,7 +16,9 @@ def append_event(database_url: str, run_id: str, seq: int, payload: dict) -> Non
 
 
 def create_run(base_url: str) -> str:
-    response = httpx2.post(f"{base_url}/runs", json={"task": "make the test pass"})
+    response = httpx2.post(
+        f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "make the test pass"}}
+    )
     response.raise_for_status()
     return response.json()["id"]
 

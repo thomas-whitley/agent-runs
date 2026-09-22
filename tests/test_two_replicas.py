@@ -45,7 +45,7 @@ def create_run(base_url: str) -> str:
     conn.request(
         "POST",
         "/runs",
-        json.dumps({"task": "two replica check"}),
+        json.dumps({"type": "pytest", "inputs": {"task": "two replica check"}}),
         {"content-type": "application/json"},
     )
     body = json.load(conn.getresponse())
