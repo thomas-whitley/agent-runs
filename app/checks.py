@@ -4,6 +4,7 @@ self hosted worker, per docs/mercury.md, because they should not depend on
 a machine that sleeps.
 """
 
+import http.client
 import time
 import urllib.error
 import urllib.request
@@ -38,7 +39,7 @@ def check_site(url: str, timeout_seconds: float = 10.0) -> SiteCheckResult:
             latency_ms=(time.monotonic() - started) * 1000,
             passed=error.code < 400,
         )
-    except (urllib.error.URLError, OSError) as error:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
         return SiteCheckResult(
             url=url,
             status_code=None,
