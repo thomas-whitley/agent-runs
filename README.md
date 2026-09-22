@@ -43,6 +43,7 @@ with a React app, so nothing here is meant to last.
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | green, by full text search |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` | green |
+| A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py` | green |
 
 ## Resume, and the test that proves it
 
@@ -285,6 +286,41 @@ and therefore out of scope here. A run that takes longer than that will have its
 stream cut by the platform, and the client has to reconnect with `Last-Event-ID`
 and carry on, which is exactly the path this repo exists to make work. The
 reconnect is free because the events table is the cursor.
+
+## Observability
+
+A run is one trace across both roles, not two unrelated ones. `POST /runs` opens a
+root span and stores its W3C `traceparent` on the run row. The worker restores that
+context before the loop starts, so its five step spans, plan, retrieve, act, verify,
+done, land as children of the api's root span. `OTEL_SERVICE_NAME` is set per role
+in the Bicep, so Application Insights tells the api and the worker apart by
+`cloud_RoleName` instead of showing both as `unknown_service`.
+
+```
+tests/test_telemetry.py::test_instrumenting_at_construction_puts_otel_middleware_in_the_stack PASSED [ 50%]
+tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context PASSED [100%]
+
+============================== 2 passed in 1.93s ===============================
+```
+
+The first test is the regression that survived one whole session undetected:
+`FastAPIInstrumentor.instrument_app` works by patching `build_middleware_stack`, and
+Starlette calls that method itself on the first ASGI scope the app receives,
+including the lifespan startup scope, which runs before the lifespan function's own
+body does. Instrumenting from inside the lifespan therefore patches a method that has
+already been called, and nothing raises to say so. `create_app()` instruments before
+returning the app, which is before uvicorn sends it anything.
+
+Every process also writes structured JSON to stdout, which the managed environment
+ships to the workspace on its own, not through the telemetry exporter, so logs keep
+working in CI, in compose, and on a machine with no exporter configured. A line
+carries a timestamp, level, logger, message, and whatever the call site passed as
+`extra`; the trace and span ids come from whatever span is current when the line is
+emitted. Neither a task's input body nor a model's output is ever logged.
+
+```
+{"timestamp": "2026-09-22T10:43:45.370354+00:00", "level": "INFO", "logger": "agent_runs.worker", "message": "claimed run 9af98c5f-ac20-4a35-8cde-5f9e3e1641f2", "run_id": "9af98c5f-ac20-4a35-8cde-5f9e3e1641f2", "worker_id": "413aae328332-f84f09b2"}
+```
 
 ## A note on free tier quotas
 

@@ -333,3 +333,51 @@ def test_the_loop_still_runs_without_a_worker_id(migrated_db):
     result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
 
     assert result.status == "succeeded"
+
+
+def test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context(
+    migrated_db, in_memory_tracer, span_exporter
+):
+    """A run is one trace across the API and the worker. The API's root span
+    is simulated here by calling start_run_trace directly and storing its
+    traceparent on the row, exactly as create_run does."""
+    from app.telemetry import start_run_trace
+
+    trace_context = start_run_trace(tracer=in_memory_tracer)
+    run_id = migrated_db.execute(
+        "INSERT INTO runs (task, trace_context) VALUES (%s, %s) RETURNING id",
+        (PASSING_TEST, trace_context),
+    ).fetchone()[0]
+
+    run_agent_loop(
+        migrated_db,
+        run_id,
+        StubModel(replies=[CORRECT]),
+        token_budget=50_000,
+        tracer=in_memory_tracer,
+    )
+
+    spans = span_exporter.get_finished_spans()
+    root = next(s for s in spans if s.name == "run")
+    steps = [s for s in spans if s is not root]
+
+    assert [s.name for s in steps] == [
+        "step.plan",
+        "step.retrieve",
+        "step.act",
+        "step.verify",
+        "step.done",
+    ]
+    for step in steps:
+        assert step.context.trace_id == root.context.trace_id
+        assert step.parent.span_id == root.context.span_id
+
+
+def test_the_loop_still_writes_spans_when_the_run_has_no_stored_trace_context(migrated_db):
+    """A run created before this column existed, or with tracing off, must not
+    raise just because there is nothing to restore."""
+    run_id = new_run(migrated_db, PASSING_TEST)
+
+    result = run_agent_loop(migrated_db, run_id, StubModel(replies=[CORRECT]), token_budget=50_000)
+
+    assert result.status == "succeeded"

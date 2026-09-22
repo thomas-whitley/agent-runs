@@ -20,6 +20,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx2" },
+    { name = "opentelemetry-sdk" },
     { name = "ruff" },
 ]
 
@@ -38,6 +39,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx2", specifier = ">=2.13.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.27" },
     { name = "ruff", specifier = ">=0.8" },
 ]
 

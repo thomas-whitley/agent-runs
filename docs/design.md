@@ -67,25 +67,25 @@ The loop talks to a `Model` protocol with one `complete` method. `MODEL=stub` ru
 - `docker-compose.yml` runs Postgres with pgvector, two api replicas behind nginx on one port, and one worker. This is where the two replica test runs, locally and in CI.
 - `infra/main.bicep` declares a Container Apps environment on the consumption plan, an `api` app at min 0 max 2 replicas scaling on HTTP concurrency, a `worker` app at min 0 max 1 scaling on a KEDA postgresql query over pending runs, and a Log Analytics workspace. There is no database resource; the connection string is a secret.
 - `.github/workflows/ci.yml` runs lint and tests on every push against the compose Postgres with the stub model. `deploy.yml` builds and pushes the image and updates the apps through an OIDC federated credential, with no stored cloud secret. `keepalive.yml` pings the database and the health endpoint daily so a free tier project does not pause.
-- OpenTelemetry is configured in the api and exports to Azure Monitor, but nothing
-  useful is traced yet and the repo does not claim otherwise. Checked against the
-  live deployment on 2026-09-21: the only rows in Application Insights are the
-  Azure Monitor SDK fetching its own configuration. There are no `requests` rows,
-  because `FastAPIInstrumentor.instrument_app` runs inside the lifespan. It works by
-  patching `build_middleware_stack`, and Starlette has already called that by the
-  time lifespan startup runs, so the patch never takes and nothing raises. Measured
-  on starlette 1.6.0: instrumenting at construction puts `OpenTelemetryMiddleware`
-  in the stack, instrumenting in the lifespan leaves it out. The worker never calls
-  `configure_telemetry` at all, so the half of the system that runs the agent loop
-  emits nothing. `cloud_RoleName` is `unknown_service` because no service name is
-  set.
+- A run is one trace across both roles. `POST /runs` opens a root span and stores its
+  W3C `traceparent` on the run row; the worker restores that context before the loop
+  starts, so its five step spans (plan, retrieve, act, verify, done) land as children
+  of the api's root span rather than starting a second, unrelated trace. `NULL` in
+  `trace_context` means tracing was off when the run was created, and a step then
+  starts its own trace rather than raising. `FastAPIInstrumentor.instrument_app` runs
+  from `create_app()`, not the lifespan: it works by patching `build_middleware_stack`,
+  and Starlette calls that method itself the first time the app receives any ASGI
+  scope, including the lifespan startup scope, which is before the lifespan
+  function's own body runs. `OTEL_SERVICE_NAME` is set per role in the Bicep, so
+  `cloud_RoleName` tells the api and the worker apart in Application Insights.
 
-  Even with all three fixed, the api and the worker would produce two unrelated
-  traces rather than one. They share no trace context, because they communicate only
-  through the events table and nothing carries a `traceparent`. End to end tracing
-  needs that context persisted on the run when it is created and restored in the
-  worker before the loop starts. That is what the deleted sentence about the trace
-  id riding on the event payload was for.
+  Every process also writes structured JSON to stdout, which the managed environment
+  ships to the workspace on its own. This is deliberately not routed through the
+  telemetry exporter, so logs keep working in CI, in compose, and on a machine with
+  no exporter configured. A line carries a timestamp, level, logger, message, and
+  whatever the call site passed as `extra` (run id, worker id); the trace and span
+  ids come from whatever span is current when the line is emitted. A task's input
+  body and a model's output never appear in a log line.
 - Container Apps cuts an HTTP request at 240 seconds on the consumption plan. Keepalives do not extend it and raising it needs paid premium ingress, so a run longer than that has its stream cut and the client reconnects with `Last-Event-ID`.
 
 ## Cost

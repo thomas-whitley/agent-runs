@@ -112,6 +112,28 @@ def start_server(clean_db: str, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
+def span_exporter():
+    """Spans as a test would see them, never sent to a global tracer provider.
+
+    OpenTelemetry allows setting the global tracer provider exactly once per
+    process, so tests build their own local one instead of fighting that.
+    """
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    return InMemorySpanExporter()
+
+
+@pytest.fixture
+def in_memory_tracer(span_exporter):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    return provider.get_tracer("test")
+
+
+@pytest.fixture
 def migrated_db(clean_db: str):
     """A connection to a migrated, empty database, for code that does not go through the api."""
     from app.migrations import apply_migrations

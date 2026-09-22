@@ -4,14 +4,17 @@ import logging
 import time
 
 import psycopg
+from opentelemetry import trace
 
 from app.config import Settings, load_settings
 from app.corpus import load_corpus
+from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
 from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, heartbeat, record_step
+from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
 
@@ -63,13 +66,17 @@ def process_run(
     model: Model,
     settings: Settings,
     retriever: Retriever | None = None,
+    tracer: trace.Tracer | None = None,
 ) -> LoopResult | None:
     """Execute one claimed run. None means the daily guard refused it."""
     # Check then act, which is safe only because the worker runs at one replica
     # (maxReplicas is 1 in the Bicep). Two workers could both pass this.
     if runs_started_today(conn) > settings.max_runs_per_day:
         logger.warning(
-            "refusing run %s: daily limit of %s reached", run_id, settings.max_runs_per_day
+            "refusing run %s: daily limit of %s reached",
+            run_id,
+            settings.max_runs_per_day,
+            extra={"run_id": run_id, "worker_id": settings.worker_id},
         )
         refuse_run(conn, run_id, f"daily limit of {settings.max_runs_per_day} runs reached")
         return None
@@ -83,6 +90,7 @@ def process_run(
         on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
         retriever=retriever,
         worker_id=settings.worker_id,
+        tracer=tracer,
     )
 
 
@@ -117,9 +125,12 @@ def build_model(settings: Settings) -> Model:
 
 
 def main() -> None:  # pragma: no cover - the process entry point
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_logging()
     settings = load_settings()
     apply_migrations(settings.database_url)
+    # No FastAPI app here to instrument; this turns on the same global tracer
+    # provider the loop's step spans pick up ambiently.
+    configure_telemetry()
     model = build_model(settings)
     retriever = build_retriever(settings)
 
@@ -128,11 +139,12 @@ def main() -> None:  # pragma: no cover - the process entry point
         settings.worker_id,
         settings.model,
         retriever.name,
+        extra={"worker_id": settings.worker_id},
     )
 
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
         added = index_corpus(conn, load_corpus(), embedder=retriever.embedder)
-        logger.info("corpus indexed, %s new chunks", added)
+        logger.info("corpus indexed, %s new chunks", added, extra={"worker_id": settings.worker_id})
 
         while True:
             try:
@@ -140,7 +152,11 @@ def main() -> None:  # pragma: no cover - the process entry point
                 if run_id is None:
                     time.sleep(settings.poll_seconds)
                     continue
-                logger.info("claimed run %s", run_id)
+                logger.info(
+                    "claimed run %s",
+                    run_id,
+                    extra={"run_id": run_id, "worker_id": settings.worker_id},
+                )
                 process_run(conn, run_id, model, settings, retriever)
             except Exception:
                 # run_agent_loop already closes a run it could not finish. This

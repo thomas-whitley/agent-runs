@@ -10,11 +10,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import psycopg
+from opentelemetry import trace
 
 from app.model import Model, ModelReply, extract_code
 from app.retrieval import DEFAULT_LIMIT, Retriever
 from app.runs import finish_run, record_step
 from app.sandbox import DEFAULT_TIMEOUT_SECONDS, verify
+from app.telemetry import step_span
 
 DEFAULT_TOKEN_BUDGET = 50_000
 DEFAULT_MAX_ATTEMPTS = 10
@@ -109,9 +111,10 @@ def run_agent_loop(
     on_step: Callable[[], bool] | None = None,
     retriever: Retriever | None = None,
     worker_id: str | None = None,
+    tracer: trace.Tracer | None = None,
 ) -> LoopResult:
-    test_code, tokens_used = conn.execute(
-        "SELECT task, tokens_used FROM runs WHERE id = %s", (run_id,)
+    test_code, tokens_used, trace_context = conn.execute(
+        "SELECT task, tokens_used, trace_context FROM runs WHERE id = %s", (run_id,)
     ).fetchone()
 
     # A replacement worker continues where the dead one stopped. Steps are keyed
@@ -128,9 +131,13 @@ def run_agent_loop(
             raise ClaimLost(run_id)
 
     def write(step_seq: int, kind: str, output: dict, tokens: int = 0) -> None:
-        written = record_step(
-            conn, run_id, step_seq, kind, output=output, tokens=tokens, worker_id=worker_id
-        )
+        with step_span(trace_context, kind, tracer=tracer) as span:
+            span.set_attribute("step.kind", kind)
+            if tokens:
+                span.set_attribute("step.tokens", tokens)
+            written = record_step(
+                conn, run_id, step_seq, kind, output=output, tokens=tokens, worker_id=worker_id
+            )
         if not written and worker_id is not None:
             # Either the seq was already committed by us, or we no longer own the
             # run. Checking ownership tells the two apart.

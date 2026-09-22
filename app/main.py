@@ -8,9 +8,10 @@ from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, field_validator
 
 from app.config import load_settings
+from app.logging_setup import configure_logging
 from app.migrations import apply_migrations
 from app.stream import event_stream, parse_last_event_id
-from app.telemetry import configure_telemetry
+from app.telemetry import configure_telemetry, start_run_trace
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -42,7 +43,6 @@ async def lifespan(app: FastAPI):
 
     app.state.settings = settings
     app.state.pool = pool
-    app.state.tracing = configure_telemetry(app)
     try:
         yield
     finally:
@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     app = FastAPI(title="agent-runs", lifespan=lifespan)
 
     @app.middleware("http")
@@ -69,9 +70,11 @@ def create_app() -> FastAPI:
 
     @app.post("/runs", status_code=201, response_model=RunCreated)
     async def create_run(run: RunRequest, request: Request) -> RunCreated:
+        trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(
-                "INSERT INTO runs (task) VALUES (%s) RETURNING id, status", (run.task,)
+                "INSERT INTO runs (task, trace_context) VALUES (%s, %s) RETURNING id, status",
+                (run.task, trace_context),
             )
             row = await cursor.fetchone()
         return RunCreated(id=row[0], status=row[1])
@@ -96,6 +99,10 @@ def create_app() -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    # After the routes exist, not from the lifespan: see configure_telemetry's
+    # docstring for why the timing matters.
+    configure_telemetry(app)
 
     return app
 

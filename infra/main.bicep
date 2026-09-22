@@ -178,6 +178,13 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ROLE'
               value: 'api'
             }
+            {
+              // Resource.create() reads this when configure_azure_monitor is not
+              // given an explicit resource. Without it both roles land under the
+              // SDK default name and traces cannot be told apart by cloud_RoleName.
+              name: 'OTEL_SERVICE_NAME'
+              value: '${name}-api'
+            }
           ])
         }
       ]
@@ -221,6 +228,10 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ROLE'
               value: 'worker'
+            }
+            {
+              name: 'OTEL_SERVICE_NAME'
+              value: '${name}-worker'
             }
           ], modelEnvironment)
         }

@@ -22,6 +22,24 @@ def test_post_runs_creates_a_pending_run(start_server, clean_db):
     assert row == ("make tests/example_test.py pass", "pending", None)
 
 
+def test_a_run_created_with_tracing_off_stores_no_trace_context(
+    start_server, clean_db, monkeypatch
+):
+    """NULL, not an empty string, so the column keeps one meaning."""
+    monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
+    base_url = start_server()
+
+    response = httpx2.post(f"{base_url}/runs", json={"task": "make tests/example_test.py pass"})
+    run_id = response.json()["id"]
+
+    with psycopg.connect(clean_db) as conn:
+        trace_context = conn.execute(
+            "SELECT trace_context FROM runs WHERE id = %s", (run_id,)
+        ).fetchone()[0]
+
+    assert trace_context is None
+
+
 def test_post_runs_rejects_an_empty_task(start_server):
     base_url = start_server()
 
