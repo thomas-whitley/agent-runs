@@ -11,6 +11,35 @@ DEFAULT_EMBEDDING_MODEL = "voyage-3"
 
 
 @dataclass(frozen=True)
+class ProviderConfig:
+    """One entry of PROVIDERS. api_key_env names the secret, never holds it."""
+
+    kind: str  # "openai_compatible" or "anthropic"
+    base_url: str | None
+    api_key_env: str
+    model: str
+
+
+# Chosen per task type by the registry in app/tasks.py, not by MODEL. Both
+# entries reuse the env var names the deploy already has: MODEL_API_KEY for
+# Gemini's free tier key, ANTHROPIC_API_KEY for the Haiku 4.5 task types.
+PROVIDERS: dict[str, ProviderConfig] = {
+    "gemini": ProviderConfig(
+        kind="openai_compatible",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key_env="MODEL_API_KEY",
+        model="gemini-3.5-flash-lite",
+    ),
+    "haiku": ProviderConfig(
+        kind="anthropic",
+        base_url=None,
+        api_key_env="ANTHROPIC_API_KEY",
+        model="claude-haiku-4-5-20251001",
+    ),
+}
+
+
+@dataclass(frozen=True)
 class Settings:
     database_url: str
     keepalive_seconds: float
