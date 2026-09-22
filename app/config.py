@@ -55,6 +55,7 @@ class Settings:
     model_timeout_seconds: float
     replica_id: str
     voyage_api_key: str | None
+    mercury_bearer_token: str | None
     embedding_model: str
 
 
@@ -76,5 +77,6 @@ def load_settings() -> Settings:
         model_timeout_seconds=float(os.environ.get("MODEL_TIMEOUT_SECONDS", "25")),
         replica_id=os.environ.get("REPLICA_ID") or socket.gethostname(),
         voyage_api_key=os.environ.get("VOYAGE_API_KEY") or None,
+        mercury_bearer_token=os.environ.get("MERCURY_BEARER_TOKEN") or None,
         embedding_model=os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
     )

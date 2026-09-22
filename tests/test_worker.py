@@ -35,6 +35,7 @@ def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
         model_timeout_seconds=25.0,
         replica_id="replica-test",
         voyage_api_key=None,
+        mercury_bearer_token=None,
         embedding_model="voyage-3",
     )
     return Settings(**{**defaults, **overrides})

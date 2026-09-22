@@ -63,11 +63,14 @@ def test_post_runs_rejects_an_unregistered_type(start_server):
     assert response.status_code == 422
 
 
-def test_post_runs_stores_the_type_s_registered_provider(start_server, clean_db):
+def test_post_runs_stores_the_type_s_registered_provider(start_server, clean_db, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
     base_url = start_server()
 
     response = httpx2.post(
-        f"{base_url}/runs", json={"type": "digest", "inputs": {"task": "daily summary"}}
+        f"{base_url}/runs",
+        json={"type": "digest", "inputs": {"task": "daily summary"}},
+        headers={"Authorization": "Bearer the-real-token"},
     )
 
     run_id = response.json()["id"]
@@ -105,3 +108,56 @@ def test_the_replica_id_defaults_to_the_hostname(start_server, monkeypatch):
     response = httpx2.get(f"{base_url}/health")
 
     assert response.headers["X-Replica"] == socket.gethostname()
+
+
+def test_post_runs_requires_a_bearer_token_for_a_non_public_type(start_server, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = httpx2.post(f"{base_url}/runs", json={"type": "digest", "inputs": {"task": "x"}})
+
+    assert response.status_code == 401
+
+
+def test_post_runs_accepts_the_right_bearer_token_for_a_non_public_type(start_server, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "digest", "inputs": {"task": "x"}},
+        headers={"Authorization": "Bearer the-real-token"},
+    )
+
+    assert response.status_code == 201
+
+
+def test_post_runs_rejects_the_wrong_bearer_token(start_server, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "digest", "inputs": {"task": "x"}},
+        headers={"Authorization": "Bearer wrong"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_post_runs_never_requires_a_token_for_the_public_pytest_type(start_server, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = httpx2.post(f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}})
+
+    assert response.status_code == 201
+
+
+def test_post_runs_refuses_a_non_public_type_when_no_token_is_configured(start_server):
+    """Fail closed: an unset MERCURY_BEARER_TOKEN must not wave every caller through."""
+    base_url = start_server()
+
+    response = httpx2.post(f"{base_url}/runs", json={"type": "digest", "inputs": {"task": "x"}})
+
+    assert response.status_code == 401

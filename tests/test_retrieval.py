@@ -138,6 +138,7 @@ def settings_for_retrieval(voyage_api_key=None):
         model_timeout_seconds=25.0,
         replica_id="replica-test",
         voyage_api_key=voyage_api_key,
+        mercury_bearer_token=None,
         embedding_model="voyage-3",
     )
 

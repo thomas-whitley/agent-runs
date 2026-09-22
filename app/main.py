@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, field_validator
 
+from app.auth import require_bearer_token
 from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.migrations import apply_migrations
@@ -84,6 +85,8 @@ def create_app() -> FastAPI:
     @app.post("/runs", status_code=201, response_model=RunCreated)
     async def create_run(run: RunRequest, request: Request) -> RunCreated:
         task_type = TASK_TYPES[run.type]
+        if not task_type.public:
+            require_bearer_token(request)
         trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(
