@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, field_validator
@@ -11,6 +11,7 @@ from pydantic import BaseModel, field_validator
 from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.migrations import apply_migrations
+from app.run_list import DEFAULT_LIMIT, MAX_LIMIT, build_query, encode_cursor, serialize_run_row
 from app.stream import event_stream, parse_last_event_id
 from app.tasks import TASK_TYPES
 from app.telemetry import configure_telemetry, start_run_trace
@@ -92,6 +93,20 @@ def create_app() -> FastAPI:
             )
             row = await cursor.fetchone()
         return RunCreated(id=row[0], status=row[1])
+
+    @app.get("/runs")
+    async def list_runs(
+        request: Request,
+        limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+        cursor: str | None = None,
+    ) -> dict:
+        sql, params = build_query(cursor)
+        async with request.app.state.pool.connection() as conn:
+            result = await conn.execute(sql, [*params, limit])
+            rows = await result.fetchall()
+
+        next_cursor = encode_cursor(rows[-1][7], rows[-1][0]) if len(rows) == limit else None
+        return {"runs": [serialize_run_row(row) for row in rows], "next_cursor": next_cursor}
 
     @app.get("/runs/{run_id}/events")
     async def stream_run_events(run_id: uuid.UUID, request: Request) -> StreamingResponse:
