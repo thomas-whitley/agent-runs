@@ -310,6 +310,26 @@ tests/test_loop.py::test_a_failure_log_line_inside_the_loop_carries_the_run_s_tr
 ============================== 4 passed in 3.78s ===============================
 ```
 
+Checked against the live deployment, not just the unit tests: one run's `operation_Id`
+in Application Insights covers the api's root span and every one of the worker's step
+spans through to `step.done`, with `cloud_RoleName` telling the two roles apart.
+
+```
+$ az rest --method post \
+    --url "https://api.applicationinsights.io/v1/apps/154a7510-caa6-4649-b858-ba28d5b21abd/query" \
+    --resource "https://api.applicationinsights.io" \
+    --body '{"query":"dependencies | where timestamp > ago(15m) | where name startswith \"step.\" or name == \"run\" | project name, operation_Id, cloud_RoleName | order by timestamp asc"}'
+
+name          operation_Id                      cloud_RoleName
+run           8efea36baffe19ceb8e2e1f1554a9cd9  agent-runs-api
+step.plan     8efea36baffe19ceb8e2e1f1554a9cd9  agent-runs-worker
+step.retrieve 8efea36baffe19ceb8e2e1f1554a9cd9  agent-runs-worker
+step.act      8efea36baffe19ceb8e2e1f1554a9cd9  agent-runs-worker
+step.verify   8efea36baffe19ceb8e2e1f1554a9cd9  agent-runs-worker
+...
+step.done     8efea36baffe19ceb8e2e1f1554a9cd9  agent-runs-worker
+```
+
 The first test is the regression that survived one whole session undetected:
 `FastAPIInstrumentor.instrument_app` works by patching `build_middleware_stack`, and
 Starlette calls that method itself on the first ASGI scope the app receives,
