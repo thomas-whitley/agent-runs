@@ -1,5 +1,5 @@
 """The cloud side check: plain HTTP status and latency, no browser, no
-model call. A bad result is data, never an exception — the caller always
+model call. A bad result is data, never an exception: the caller always
 gets a SiteCheckResult back.
 """
 

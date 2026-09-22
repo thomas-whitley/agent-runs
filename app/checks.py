@@ -21,7 +21,8 @@ class SiteCheckResult:
 
 
 def check_site(url: str, timeout_seconds: float = 10.0) -> SiteCheckResult:
-    """A 2xx or 3xx within the timeout passes. Anything else, including a
+    """A 2xx within the timeout passes; redirects are followed first, so the
+    status seen is the final hop's. Anything else, including a
     timeout or a connection error, is a finding, not an exception."""
     started = time.monotonic()
     try:

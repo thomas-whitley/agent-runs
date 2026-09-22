@@ -29,6 +29,10 @@ param model string = 'stub'
 @secure()
 param voyageApiKey string = ''
 
+@description('Bearer token for every non-public endpoint. Empty fails closed.')
+@secure()
+param mercuryBearerToken string = ''
+
 var logAnalyticsName = '${name}-logs'
 var environmentName = '${name}-env'
 
@@ -89,6 +93,14 @@ var optionalSecrets = concat(
         {
           name: 'voyage-api-key'
           value: voyageApiKey
+        }
+      ],
+  empty(mercuryBearerToken)
+    ? []
+    : [
+        {
+          name: 'mercury-bearer-token'
+          value: mercuryBearerToken
         }
       ]
 )
@@ -173,7 +185,12 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
-          env: concat(sharedEnvironment, [
+          env: concat(sharedEnvironment, empty(mercuryBearerToken) ? [] : [
+            {
+              name: 'MERCURY_BEARER_TOKEN'
+              secretRef: 'mercury-bearer-token'
+            }
+          ], [
             {
               name: 'ROLE'
               value: 'api'

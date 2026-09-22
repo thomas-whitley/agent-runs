@@ -20,6 +20,8 @@ services:
     environment:
       ROLE: api
       DATABASE_URL: postgresql://agent:agent@db:5432/agent_runs
+      # Unset fails closed: every non-public POST /runs answers 401.
+      MERCURY_BEARER_TOKEN: ${MERCURY_BEARER_TOKEN:-}
     expose:
       - "8000"
     deploy:

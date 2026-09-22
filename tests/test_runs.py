@@ -161,3 +161,35 @@ def test_post_runs_refuses_a_non_public_type_when_no_token_is_configured(start_s
     response = httpx2.post(f"{base_url}/runs", json={"type": "digest", "inputs": {"task": "x"}})
 
     assert response.status_code == 401
+
+
+def test_events_of_a_non_public_run_require_the_bearer_token(start_server, monkeypatch):
+    """The guard list: event bodies sit behind the same token as run creation."""
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+    created = httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "digest", "inputs": {"task": "x"}},
+        headers={"Authorization": "Bearer the-real-token"},
+    ).json()
+
+    denied = httpx2.get(f"{base_url}/runs/{created['id']}/events")
+    with httpx2.stream(
+        "GET",
+        f"{base_url}/runs/{created['id']}/events",
+        headers={"Authorization": "Bearer the-real-token"},
+    ) as allowed:
+        assert allowed.status_code == 200
+
+    assert denied.status_code == 401
+
+
+def test_events_of_a_public_run_never_require_a_token(start_server, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+    created = httpx2.post(
+        f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}}
+    ).json()
+
+    with httpx2.stream("GET", f"{base_url}/runs/{created['id']}/events") as response:
+        assert response.status_code == 200

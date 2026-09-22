@@ -108,7 +108,9 @@ def create_app() -> FastAPI:
             result = await conn.execute(sql, [*params, limit])
             rows = await result.fetchall()
 
-        next_cursor = encode_cursor(rows[-1][7], rows[-1][0]) if len(rows) == limit else None
+        next_cursor = (
+            encode_cursor(rows[-1][7], rows[-1][0]) if rows and len(rows) == limit else None
+        )
         return {"runs": [serialize_run_row(row) for row in rows], "next_cursor": next_cursor}
 
     @app.get("/runs/{run_id}/events")
@@ -116,9 +118,13 @@ def create_app() -> FastAPI:
         pool = request.app.state.pool
 
         async with pool.connection() as conn:
-            cursor = await conn.execute("SELECT 1 FROM runs WHERE id = %s", (str(run_id),))
-            if await cursor.fetchone() is None:
-                raise HTTPException(status_code=404, detail="run not found")
+            cursor = await conn.execute("SELECT type FROM runs WHERE id = %s", (str(run_id),))
+            row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        # Event bodies of a non-public run sit behind the same token as its creation.
+        if not TASK_TYPES[row[0]].public:
+            require_bearer_token(request)
 
         after_id = parse_last_event_id(request.headers.get("Last-Event-ID"))
 

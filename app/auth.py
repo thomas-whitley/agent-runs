@@ -2,6 +2,8 @@
 guard list: "The bearer token on every non public endpoint."
 """
 
+import hmac
+
 from fastapi import HTTPException, Request
 
 
@@ -12,5 +14,5 @@ def require_bearer_token(request: Request) -> None:
     expected = request.app.state.settings.mercury_bearer_token
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
-    if not expected or scheme.lower() != "bearer" or token != expected:
+    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
