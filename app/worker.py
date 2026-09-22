@@ -1,12 +1,13 @@
 """The worker role: claim a pending run, execute its loop, append its events."""
 
 import logging
+import os
 import time
 
 import psycopg
 from opentelemetry import trace
 
-from app.config import Settings, load_settings
+from app.config import PROVIDERS, Settings, load_settings
 from app.corpus import load_corpus
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
@@ -14,9 +15,14 @@ from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, heartbeat, record_step
+from app.tasks import TASK_TYPES
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
+
+# pytest is the only type with an executor so far. Every other registered
+# type is refused, closing its stream, until its own step lands.
+_RUNNABLE_TYPES = {"pytest"}
 
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
 # lease. The second case is a worker that was killed outright.
@@ -60,15 +66,19 @@ def refuse_run(conn: psycopg.Connection, run_id: str, reason: str) -> None:
     conn.execute("UPDATE runs SET status = 'refused', finished_at = now() WHERE id = %s", (run_id,))
 
 
+def _run_type(conn: psycopg.Connection, run_id: str) -> str:
+    return conn.execute("SELECT type FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
+
+
 def process_run(
     conn: psycopg.Connection,
     run_id: str,
-    model: Model,
+    model: Model | None,
     settings: Settings,
     retriever: Retriever | None = None,
     tracer: trace.Tracer | None = None,
 ) -> LoopResult | None:
-    """Execute one claimed run. None means the daily guard refused it."""
+    """Execute one claimed run. None means it was refused rather than run."""
     # Check then act, which is safe only because the worker runs at one replica
     # (maxReplicas is 1 in the Bicep). Two workers could both pass this.
     if runs_started_today(conn) > settings.max_runs_per_day:
@@ -81,6 +91,17 @@ def process_run(
         refuse_run(conn, run_id, f"daily limit of {settings.max_runs_per_day} runs reached")
         return None
 
+    task_type_name = _run_type(conn, run_id)
+    if task_type_name not in _RUNNABLE_TYPES:
+        logger.warning(
+            "refusing run %s: task type %s has no executor yet",
+            run_id,
+            task_type_name,
+            extra={"run_id": run_id, "worker_id": settings.worker_id},
+        )
+        refuse_run(conn, run_id, f"task type {task_type_name!r} is not runnable yet")
+        return None
+
     return run_agent_loop(
         conn,
         run_id,
@@ -91,37 +112,39 @@ def process_run(
         retriever=retriever,
         worker_id=settings.worker_id,
         tracer=tracer,
-        provider=settings.model,
+        provider=TASK_TYPES[task_type_name].provider,
     )
 
 
-def build_model(settings: Settings) -> Model:
-    """Pick the model from what is configured, without a provider switch to maintain."""
+def build_model(settings: Settings, provider_name: str) -> Model:
+    """Build the model for one registered provider. MODEL=stub skips the registry."""
     if settings.model == "stub":
         return StubModel(replies=[""])
 
-    if settings.model_base_url:
-        from app.model import OpenAICompatibleModel
+    provider = PROVIDERS.get(provider_name)
+    if provider is None:
+        raise RuntimeError(f"no provider registered as {provider_name!r}")
 
-        return OpenAICompatibleModel(
-            model=settings.model,
-            api_key=settings.model_api_key,
-            base_url=settings.model_base_url,
-            timeout_seconds=settings.model_timeout_seconds,
-        )
+    api_key = os.environ.get(provider.api_key_env)
+    if not api_key:
+        raise RuntimeError(f"no model credentials: set {provider.api_key_env}")
 
-    if settings.anthropic_api_key:
+    if provider.kind == "anthropic":
         from app.model import AnthropicModel
 
         return AnthropicModel(
-            model=settings.model,
-            api_key=settings.anthropic_api_key,
+            model=provider.model,
+            api_key=api_key,
             timeout_seconds=settings.model_timeout_seconds,
         )
 
-    raise RuntimeError(
-        "no model credentials: set MODEL=stub, or MODEL_BASE_URL with MODEL_API_KEY, "
-        "or ANTHROPIC_API_KEY"
+    from app.model import OpenAICompatibleModel
+
+    return OpenAICompatibleModel(
+        model=provider.model,
+        api_key=api_key,
+        base_url=provider.base_url,
+        timeout_seconds=settings.model_timeout_seconds,
     )
 
 
@@ -132,11 +155,19 @@ def main() -> None:  # pragma: no cover - the process entry point
     # No FastAPI app here to instrument; this turns on the same global tracer
     # provider the loop's step spans pick up ambiently.
     configure_telemetry()
-    model = build_model(settings)
     retriever = build_retriever(settings)
+    models: dict[str, Model] = {}
+
+    def model_for(provider_name: str | None) -> Model | None:
+        """One client per provider, built the first time a run needs it."""
+        if provider_name is None:
+            return None
+        if provider_name not in models:
+            models[provider_name] = build_model(settings, provider_name)
+        return models[provider_name]
 
     logger.info(
-        "worker %s started on model %s, retrieval by %s",
+        "worker %s started, model %s, retrieval by %s",
         settings.worker_id,
         settings.model,
         retriever.name,
@@ -158,7 +189,9 @@ def main() -> None:  # pragma: no cover - the process entry point
                     run_id,
                     extra={"run_id": run_id, "worker_id": settings.worker_id},
                 )
-                process_run(conn, run_id, model, settings, retriever)
+                task_type = TASK_TYPES.get(_run_type(conn, run_id))
+                provider_name = task_type.provider if task_type else None
+                process_run(conn, run_id, model_for(provider_name), settings, retriever)
             except Exception:
                 # run_agent_loop already closes a run it could not finish. This
                 # catches everything outside it, so the worker outlives a blip.

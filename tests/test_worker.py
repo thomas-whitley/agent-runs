@@ -3,7 +3,7 @@
 import pytest
 
 from app.config import Settings
-from app.model import OpenAICompatibleModel, StubModel
+from app.model import AnthropicModel, OpenAICompatibleModel, StubModel
 from app.worker import build_model, claim_next_run, process_run, runs_started_today
 
 PASSING_TEST = """
@@ -21,9 +21,6 @@ def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
         database_url="unused",
         keepalive_seconds=15.0,
         model="stub",
-        anthropic_api_key=None,
-        model_base_url=None,
-        model_api_key=None,
         token_budget=50_000,
         max_runs_per_day=max_runs_per_day,
         worker_id="worker-test",
@@ -102,25 +99,51 @@ def test_the_daily_limit_refuses_the_run_and_closes_its_stream(migrated_db):
     assert payload["output"]["status"] == "refused"
 
 
+def test_process_run_refuses_a_type_with_no_executor_yet(migrated_db):
+    """chat has no loop of its own until step 3. Its stream must still end."""
+    run_id = migrated_db.execute(
+        "INSERT INTO runs (task, type) VALUES (%s, %s) RETURNING id", (PASSING_TEST, "chat")
+    ).fetchone()[0]
+    claim_next_run(migrated_db, "worker-test")
+
+    result = process_run(migrated_db, run_id, StubModel(replies=[CORRECT]), settings_with())
+
+    assert result is None
+    status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
+    assert status == "refused"
+
+
 def test_build_model_returns_the_stub_when_the_model_is_stub():
-    assert isinstance(build_model(settings_with()), StubModel)
+    assert isinstance(build_model(settings_with(), "gemini"), StubModel)
 
 
-def test_build_model_uses_an_openai_compatible_endpoint_when_a_base_url_is_set():
-    settings = settings_with(
-        model="gemini-3.8-flash",
-        model_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        model_api_key="not-a-real-key",
-    )
+def test_build_model_uses_the_openai_compatible_client_for_gemini(monkeypatch):
+    monkeypatch.setenv("MODEL_API_KEY", "not-a-real-key")
+    settings = settings_with(model="gemini-3.8-flash")
 
-    assert isinstance(build_model(settings), OpenAICompatibleModel)
+    assert isinstance(build_model(settings, "gemini"), OpenAICompatibleModel)
 
 
-def test_build_model_refuses_when_no_key_is_configured():
+def test_build_model_uses_the_anthropic_client_for_haiku(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
     settings = settings_with(model="claude-haiku-4-5-20251001")
 
-    with pytest.raises(RuntimeError, match="no model credentials"):
-        build_model(settings)
+    assert isinstance(build_model(settings, "haiku"), AnthropicModel)
+
+
+def test_build_model_refuses_when_no_key_is_configured(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    settings = settings_with(model="claude-haiku-4-5-20251001")
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        build_model(settings, "haiku")
+
+
+def test_build_model_refuses_an_unregistered_provider():
+    settings = settings_with(model="claude-haiku-4-5-20251001")
+
+    with pytest.raises(RuntimeError, match="not_a_provider"):
+        build_model(settings, "not_a_provider")
 
 
 def test_claim_next_run_takes_over_a_run_whose_worker_stopped_reporting(migrated_db):
