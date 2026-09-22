@@ -119,7 +119,7 @@ Seven rows join the README's claims table. Each goes green only when a test or a
 5. `digest`, audits, cleanup.
 6. README claims and the runs page in `web/`.
 
-Each step shows something from the phone before the riskiest piece, repo chores, lands. The run list endpoint is in step 1 rather than step 6 because the chat tools and `curl` both want it long before a page does.
+Each step shows something from the phone before the riskiest piece, repo chores, lands. The run list endpoint is in step 1 rather than step 6 because the chat tools and `curl` both want it long before a page does. Steps 2 and 6 are each several hours of work, so the build brief splits them into lettered commits with an exit condition apiece.
 
 ## Out of scope
 
