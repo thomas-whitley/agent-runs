@@ -8,7 +8,7 @@ from collections.abc import Callable
 import psycopg
 from opentelemetry import trace
 
-from app.config import PROVIDERS, Settings, load_settings
+from app.config import DEFAULT_LEASE_SECONDS, PROVIDERS, Settings, load_settings
 from app.corpus import load_corpus
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
@@ -56,7 +56,7 @@ def runs_started_today(conn: psycopg.Connection) -> int:
 
 
 def claim_next_run(
-    conn: psycopg.Connection, worker_id: str, lease_seconds: float = 60.0
+    conn: psycopg.Connection, worker_id: str, lease_seconds: float = DEFAULT_LEASE_SECONDS
 ) -> str | None:
     """Claim the oldest claimable run. None means there is nothing to do."""
     for (run_id,) in conn.execute(_CLAIMABLE, (lease_seconds,)).fetchall():

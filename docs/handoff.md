@@ -70,12 +70,11 @@ the same resources".
   step 1 (`check`) and a `done` event as step 2 in one transaction. A result over
   16 KB is a 422.
 - **The daily run limit skips `site_check`,** since it makes no model call.
-- **The lease is 60 seconds, not two minutes.** The brief says the endpoints "reuse
-  the existing two minute lease", but `LEASE_SECONDS` defaults to 60 in
-  `app/config.py` and nothing sets it in the Bicep or compose. The endpoints reuse
-  that setting, so they get 60. `docs/mercury.md` also says the worker heartbeats
-  every 30 seconds. Decide which number is meant before 2c picks a heartbeat
-  interval.
+- **The lease is two minutes.** `LEASE_SECONDS` defaulted to 60 while the brief and
+  `docs/mercury.md` say two minutes. It is now 120 (`DEFAULT_LEASE_SECONDS` in
+  `app/config.py`), because a Python worker model step can run 112 seconds between
+  heartbeats. The claim endpoints reuse the setting. 2c's worker should heartbeat
+  every 30 seconds, as `docs/mercury.md` says.
 - **The scheduler's uptime runs still have no `done` event.** Their streams close
   on `finished_at`, but a client never sees how they ended. The result endpoint
   writes one. The scheduler could do the same in a small follow up.

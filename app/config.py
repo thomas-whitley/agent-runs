@@ -10,6 +10,10 @@ DEFAULT_DATABASE_URL = "postgresql://agent:agent@localhost:5432/agent_runs"
 # provider. This default only has to be something other than "stub".
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_EMBEDDING_MODEL = "voyage-3"
+# Two minutes, per docs/mercury.md. The Python worker heartbeats once per loop
+# step, and a model step can run 112 seconds (4 attempts of 25 seconds plus
+# 2, 4 and 6 second waits). The checks worker heartbeats every 30 seconds.
+DEFAULT_LEASE_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -75,7 +79,7 @@ def load_settings() -> Settings:
         worker_id=os.environ.get("WORKER_ID") or _default_worker_id(),
         poll_seconds=float(os.environ.get("POLL_SECONDS", "1")),
         verify_timeout_seconds=float(os.environ.get("VERIFY_TIMEOUT_SECONDS", "10")),
-        lease_seconds=float(os.environ.get("LEASE_SECONDS", "60")),
+        lease_seconds=float(os.environ.get("LEASE_SECONDS", DEFAULT_LEASE_SECONDS)),
         model_timeout_seconds=float(os.environ.get("MODEL_TIMEOUT_SECONDS", "25")),
         replica_id=os.environ.get("REPLICA_ID") or socket.gethostname(),
         voyage_api_key=os.environ.get("VOYAGE_API_KEY") or None,
