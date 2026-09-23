@@ -67,11 +67,14 @@ def run_due_checks(
             continue
 
         # OSError covers URLError, HTTPError (a 401 from a wrong token) and a
-        # timeout while reading the response.
+        # timeout while reading the response. It counts as a failure, so a bad
+        # token or a dead api suspends the schedule rather than skipping it
+        # every hour with nothing to show that checks have stopped.
         try:
             run_id = _create_run(api_base_url, bearer_token, url)
         except OSError:
-            logger.exception("could not create a run for %s, skipping this cycle", url)
+            logger.exception("could not create a run for %s, counted as a failure", url)
+            record_failure(conn, schedule_name)
             continue
 
         logger.info("scheduled run %s created with no client", run_id, extra={"run_id": run_id})

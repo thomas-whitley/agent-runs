@@ -70,6 +70,20 @@ def test_run_due_checks_suspends_after_the_third_consecutive_failure(
     assert is_suspended(migrated_db, name) is True
 
 
+def test_run_due_checks_counts_a_refused_post_as_a_failure(start_server, migrated_db, monkeypatch):
+    """A wrong or expired token must suspend the schedule, not skip it
+    quietly every hour with nothing to show that checks have stopped."""
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", BEARER_TOKEN)
+    base_url = start_server()
+    site = f"{base_url}/health"
+
+    for _ in range(3):
+        created = run_due_checks(migrated_db, (site,), base_url, "wrong-token")
+        assert created == []
+
+    assert is_suspended(migrated_db, f"site_uptime:{site}") is True
+
+
 def test_run_due_checks_logs_the_created_run_with_no_client(
     start_server, migrated_db, monkeypatch, caplog
 ):
