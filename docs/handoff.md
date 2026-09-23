@@ -1,4 +1,4 @@
-# Handoff: Mercury step 2a done, ready for 2b (2026-09-23, ~20:30 Melbourne)
+# Handoff: Mercury steps 2a and 2b done, ready for 2c (2026-09-23, ~21:30 Melbourne)
 
 ## Where things stand
 
@@ -8,14 +8,19 @@ The original agent-runs build is finished, Mercury steps 0 and 1 are done, and s
 `scheduled run a9f4b60f-4ff1-4f6f-872e-cbb61a216c62 created with no client`, and
 that `site_check` run closed `succeeded` with 0 tokens in 84 ms. README claim
 "A scheduled task runs with no client connected" is green with that proof pasted
-under it. 156 tests pass locally, plus the integration tests that need the compose
-stack. CI and Deploy are green on `main`.
+under it.
+
+Step 2b is done in code and not yet pushed. `POST /checks/claim`,
+`POST /checks/{id}/heartbeat` and `POST /checks/{id}/result` are in
+`app/check_claims.py`, behind the bearer token, with 22 tests in
+`tests/test_claim_endpoints.py`. 184 tests pass locally, plus the integration tests
+that need the compose stack.
 
 The live API is
 `https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io`.
 
-The next build step is **2b, the claim endpoints** (`POST /checks/claim`,
-`/heartbeat`, `/result`), specified in `docs/build-brief-mercury.md`. One decision
+The next build step is **2c, the `checks/` Node worker, Lighthouse only**, specified
+in `docs/build-brief-mercury.md`. It talks to the three endpoints above. One decision
 should be made before step 3 and is written up below under "Two deploys write to
 the same resources".
 
@@ -49,6 +54,31 @@ the same resources".
 - **The Job is deployed whenever `MERCURY_BEARER_TOKEN` is set,** with a placeholder
   config listing no sites. It has its own secret list, holding no model or embedding
   key.
+
+## What step 2b decided that the brief did not say
+
+- **A check's kind is a column.** `runs.check_kind` (migration 007) holds `uptime`,
+  `lighthouse` or `broken_links`, from `inputs.kind` on `POST /runs`. A `site_check`
+  with no kind is `uptime`, which is what the scheduler posts.
+- **Claim hands out only `lighthouse` and `broken_links`.** Declaring `uptime` is a
+  422, because the scheduler's uptime runs sit `pending` for a few seconds before it
+  closes them, and a worker could otherwise take one mid flight.
+- **Every endpoint is fenced on `type = 'site_check'` in its SQL,** so the checks
+  worker's token cannot claim, keep alive or close any other type, even a run
+  claimed under the same worker id.
+- **A result closes the run `succeeded` whatever it says,** writing the result as
+  step 1 (`check`) and a `done` event as step 2 in one transaction. A result over
+  16 KB is a 422.
+- **The daily run limit skips `site_check`,** since it makes no model call.
+- **The lease is 60 seconds, not two minutes.** The brief says the endpoints "reuse
+  the existing two minute lease", but `LEASE_SECONDS` defaults to 60 in
+  `app/config.py` and nothing sets it in the Bicep or compose. The endpoints reuse
+  that setting, so they get 60. `docs/mercury.md` also says the worker heartbeats
+  every 30 seconds. Decide which number is meant before 2c picks a heartbeat
+  interval.
+- **The scheduler's uptime runs still have no `done` event.** Their streams close
+  on `finished_at`, but a client never sees how they ended. The result endpoint
+  writes one. The scheduler could do the same in a small follow up.
 
 ## The private config repo
 
@@ -135,9 +165,8 @@ does.
 while it retries. Gemini's free tier caps calls per day per model, so a few failing
 runs exhaust it and later runs close with `status: error`. That is the error path
 working. The repo variable `MODEL` is `gemini-3.5-flash-lite` for its larger
-allowance. When step 2b's checks worker starts setting `claimed_by` on `site_check`
-runs, `_STARTED_TODAY` in `app/worker.py` must count public types only, or site
-checks will use up the daily limit.
+allowance. `_STARTED_TODAY` in `app/worker.py` skips `site_check`, so checks
+claimed by the checks worker do not use up the daily limit.
 
 ### Azure specifics that cost time to discover
 
