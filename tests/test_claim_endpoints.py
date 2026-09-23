@@ -209,3 +209,122 @@ def test_heartbeat_cannot_keep_a_run_of_another_type_alive(api, clean_db):
 
     assert response.status_code == 409
     assert seconds_since_heartbeat(clean_db, run_id) > 60
+
+
+LIGHTHOUSE_RESULT = {"performance": 0.91, "accessibility": 1.0, "failed_audits": ["image-alt"]}
+
+
+def post_result(
+    base_url: str, run_id: str, result: dict = LIGHTHOUSE_RESULT, worker_id: str = "checks-1"
+) -> httpx2.Response:
+    return httpx2.post(
+        f"{base_url}/checks/{run_id}/result",
+        json={"worker_id": worker_id, "result": result},
+        headers=AUTH,
+    )
+
+
+def run_state(db_url: str, run_id: str) -> tuple:
+    with psycopg.connect(db_url) as conn:
+        return conn.execute(
+            "SELECT status, tokens_used, finished_at IS NOT NULL FROM runs WHERE id = %s",
+            (run_id,),
+        ).fetchone()
+
+
+def test_result_requires_the_bearer_token(api, clean_db):
+    run_id = insert_run(clean_db)
+
+    response = httpx2.post(
+        f"{api}/checks/{run_id}/result", json={"worker_id": "checks-1", "result": {}}
+    )
+
+    assert response.status_code == 401
+
+
+def test_result_closes_the_check_and_records_it_as_a_step_then_done(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"])
+
+    response = post_result(api, run_id)
+
+    assert response.status_code == 200
+    assert run_state(clean_db, run_id) == ("succeeded", 0, True)
+    with psycopg.connect(clean_db) as conn:
+        events = conn.execute(
+            "SELECT seq, payload FROM events WHERE run_id = %s ORDER BY seq", (run_id,)
+        ).fetchall()
+    assert [(seq, payload["kind"]) for seq, payload in events] == [(1, "check"), (2, "done")]
+    assert events[0][1]["output"] == LIGHTHOUSE_RESULT
+    assert events[1][1]["output"] == {"status": "succeeded"}
+
+
+def test_a_result_reporting_a_broken_site_is_still_a_finished_check(api, clean_db):
+    """A 500 is a bad finding, not a reason to run the check again elsewhere."""
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"])
+
+    post_result(api, run_id, result={"status_code": 500, "error": "server error"})
+
+    assert run_state(clean_db, run_id) == ("succeeded", 0, True)
+
+
+def test_result_from_a_worker_that_does_not_hold_the_check_is_refused(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"], worker_id="checks-1")
+
+    response = post_result(api, run_id, worker_id="checks-2")
+
+    assert response.status_code == 409
+    assert run_state(clean_db, run_id) == ("running", 0, False)
+
+
+def test_result_after_a_takeover_is_refused_for_the_old_worker(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"], worker_id="checks-1")
+    age_heartbeat(clean_db, run_id)
+    claim(api, ["lighthouse"], worker_id="checks-2")
+
+    response = post_result(api, run_id, worker_id="checks-1")
+
+    assert response.status_code == 409
+    assert run_state(clean_db, run_id) == ("running", 0, False)
+
+
+def test_a_second_result_for_a_finished_check_is_refused(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"])
+    post_result(api, run_id)
+
+    response = post_result(api, run_id, result={"performance": 0.1})
+
+    assert response.status_code == 409
+    with psycopg.connect(clean_db) as conn:
+        output = conn.execute(
+            "SELECT output FROM steps WHERE run_id = %s AND seq = 1", (run_id,)
+        ).fetchone()[0]
+    assert output == LIGHTHOUSE_RESULT
+
+
+def test_result_cannot_close_a_run_of_another_type(api, clean_db):
+    run_id = insert_run(clean_db, type_="pytest", kind=None)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE runs SET claimed_by = 'checks-1', status = 'running' WHERE id = %s",
+            (run_id,),
+        )
+
+    response = post_result(api, run_id)
+
+    assert response.status_code == 409
+    assert run_state(clean_db, run_id) == ("running", 0, False)
+
+
+def test_result_refuses_a_body_far_larger_than_a_summary(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"])
+
+    response = post_result(api, run_id, result={"report": "x" * 20_000})
+
+    assert response.status_code == 422
+    assert run_state(clean_db, run_id) == ("running", 0, False)

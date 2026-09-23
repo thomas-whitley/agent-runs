@@ -6,9 +6,12 @@ declared. The type filter lives in the SQL, not in a check after it, so no
 other type can be handed out whatever the request says.
 """
 
+import json
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, field_validator
 
 from app.auth import require_bearer_token
@@ -50,6 +53,32 @@ WHERE id = %s
   AND finished_at IS NULL
 """
 
+# Fenced like the heartbeat. A result is terminal whatever it says, so the
+# run closes succeeded: a site that returned 500 is a finished check with a
+# bad finding, not a reason to run it again elsewhere.
+_CLOSE = """
+UPDATE runs
+SET status = 'succeeded', tokens_used = 0, finished_at = now()
+WHERE id = %s
+  AND type = 'site_check'
+  AND claimed_by = %s
+  AND finished_at IS NULL
+"""
+
+_INSERT_STEP = """
+INSERT INTO steps (run_id, seq, kind, output, finished_at)
+VALUES (%s, %s, %s, %s, now())
+"""
+
+_INSERT_EVENT = """
+INSERT INTO events (run_id, seq, payload)
+VALUES (%s, %s, %s)
+"""
+
+# A Lighthouse summary is about 1 KB. This leaves room for the crawl's
+# findings and the log tail sent on failure, and refuses a full report.
+MAX_RESULT_BYTES = 16_384
+
 
 class WorkerRequest(BaseModel):
     worker_id: str
@@ -73,6 +102,17 @@ class ClaimRequest(WorkerRequest):
         refused = sorted(set(value) - set(SELF_HOSTED_CHECK_KINDS))
         if refused:
             raise ValueError(f"not a self hosted check kind: {', '.join(refused)}")
+        return value
+
+
+class ResultRequest(WorkerRequest):
+    result: dict[str, Any]
+
+    @field_validator("result")
+    @classmethod
+    def result_must_be_a_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value)) > MAX_RESULT_BYTES:
+            raise ValueError(f"result is over {MAX_RESULT_BYTES} bytes; send a summary")
         return value
 
 
@@ -106,3 +146,24 @@ async def heartbeat_check(run_id: uuid.UUID, worker: WorkerRequest, request: Req
     if cursor.rowcount != 1:
         raise HTTPException(status_code=409, detail="this worker does not hold the check")
     return Lease(lease_seconds=request.app.state.settings.lease_seconds)
+
+
+@router.post("/{run_id}/result")
+async def post_check_result(
+    run_id: uuid.UUID, posted: ResultRequest, request: Request
+) -> dict[str, str]:
+    """Close the check with its result as step 1 and a done event as step 2,
+    in one transaction. 409 means this worker does not hold an open check."""
+    run = str(run_id)
+    done = {"status": "succeeded"}
+    async with request.app.state.pool.connection() as conn:
+        async with conn.transaction():
+            cursor = await conn.execute(_CLOSE, (run, posted.worker_id))
+            if cursor.rowcount != 1:
+                raise HTTPException(status_code=409, detail="this worker does not hold the check")
+            for seq, kind, output in ((1, "check", posted.result), (2, "done", done)):
+                await conn.execute(_INSERT_STEP, (run, seq, kind, Jsonb(output)))
+                await conn.execute(
+                    _INSERT_EVENT, (run, seq, Jsonb({"kind": kind, "seq": seq, "output": output}))
+                )
+    return done
