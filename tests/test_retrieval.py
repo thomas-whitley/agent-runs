@@ -139,6 +139,8 @@ def settings_for_retrieval(voyage_api_key=None):
         replica_id="replica-test",
         voyage_api_key=voyage_api_key,
         mercury_bearer_token=None,
+        api_base_url="http://localhost:8000",
+        mercury_config_path="/config/mercury.yaml",
         embedding_model="voyage-3",
     )
 

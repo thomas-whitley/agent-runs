@@ -56,6 +56,8 @@ class Settings:
     replica_id: str
     voyage_api_key: str | None
     mercury_bearer_token: str | None
+    api_base_url: str
+    mercury_config_path: str
     embedding_model: str
 
 
@@ -78,5 +80,7 @@ def load_settings() -> Settings:
         replica_id=os.environ.get("REPLICA_ID") or socket.gethostname(),
         voyage_api_key=os.environ.get("VOYAGE_API_KEY") or None,
         mercury_bearer_token=os.environ.get("MERCURY_BEARER_TOKEN") or None,
+        api_base_url=os.environ.get("API_BASE_URL", "http://localhost:8000"),
+        mercury_config_path=os.environ.get("MERCURY_CONFIG_PATH", "/config/mercury.yaml"),
         embedding_model=os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
     )

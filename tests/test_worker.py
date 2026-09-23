@@ -36,6 +36,8 @@ def settings_with(max_runs_per_day: int = 20, **overrides) -> Settings:
         replica_id="replica-test",
         voyage_api_key=None,
         mercury_bearer_token=None,
+        api_base_url="http://localhost:8000",
+        mercury_config_path="/config/mercury.yaml",
         embedding_model="voyage-3",
     )
     return Settings(**{**defaults, **overrides})
