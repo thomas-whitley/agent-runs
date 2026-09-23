@@ -1,4 +1,4 @@
-# Handoff: Mercury steps 2a and 2b done, ready for 2c (2026-09-23, ~21:30 Melbourne)
+# Handoff: Mercury steps 2a to 2c done, ready for 2d (2026-09-23, ~22:00 Melbourne)
 
 ## Where things stand
 
@@ -10,17 +10,24 @@ that `site_check` run closed `succeeded` with 0 tokens in 84 ms. README claim
 "A scheduled task runs with no client connected" is green with that proof pasted
 under it.
 
-Step 2b is done in code and not yet pushed. `POST /checks/claim`,
-`POST /checks/{id}/heartbeat` and `POST /checks/{id}/result` are in
-`app/check_claims.py`, behind the bearer token, with 22 tests in
-`tests/test_claim_endpoints.py`. 184 tests pass locally, plus the integration tests
-that need the compose stack.
+Step 2b is live. `POST /checks/claim`, `POST /checks/{id}/heartbeat` and
+`POST /checks/{id}/result` are in `app/check_claims.py`, behind the bearer token,
+with 22 tests in `tests/test_claim_endpoints.py`. 187 Python tests pass locally,
+plus the integration tests that need the compose stack.
+
+Step 2c is done. `checks/` is the Node 22 and TypeScript worker with 25 Vitest
+tests, and `ci.yml` has a `checks` job. Its exit condition was met on the live
+deploy on 2026-09-23. Run `583bed4b-d508-4aa5-a793-7a850ce421a4`, a Lighthouse check
+of the live API's own `/` page, was claimed by `node dist/main.js --once` running on
+this Linux machine as `thomas-laptop`, closed `succeeded` in 11.8 seconds, and shows
+in the live `GET /runs` with `executor: self_hosted`.
 
 The live API is
 `https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io`.
 
-The next build step is **2c, the `checks/` Node worker, Lighthouse only**, specified
-in `docs/build-brief-mercury.md`. It talks to the three endpoints above. One decision
+The next build step is **2d, the crawl, the fallback and the self hosted
+deployment**, specified in `docs/build-brief-mercury.md`. Its exit turns README claim
+seven green. One decision
 should be made before step 3 and is written up below under "Two deploys write to
 the same resources".
 
@@ -79,6 +86,23 @@ the same resources".
   on `finished_at`, but a client never sees how they ended. The result endpoint
   writes one. The scheduler could do the same in a small follow up.
 
+## What step 2c decided that the brief did not say
+
+- **npm comes from corepack on this machine.** Ubuntu's `nodejs` package has no npm.
+  `corepack npm@10.9.9 <args>` fetches it into a user cache with no sudo, and
+  `checks/package.json` pins it with `packageManager`. CI uses `actions/setup-node`.
+- **Lighthouse 13 scores five categories,** performance, accessibility,
+  best-practices, seo and agentic-browsing, which is where the brief's "five
+  category scores" lands. An audit counts as failed below 0.9, the mark Lighthouse's
+  own report uses. The live summary was 271 bytes, not the 1 KB the brief allows.
+- **Only `lighthouse` is claimed.** `KINDS` in `checks/src/worker.ts` gains
+  `broken_links` when 2d adds the crawl.
+- **The checks worker is not deployed anywhere yet.** It ran once by hand for the
+  exit proof. `checks/compose.yml` and running it on the self hosted machine are 2d.
+- **The bearer token was read from the api's Container Apps secret** for that run,
+  with `az containerapp secret list --show-values` into a shell variable, never
+  printed. The self hosted machine will need the same value in its environment.
+
 ## The private config repo
 
 `thomas-whitley/mercury-config` is private and was created on 2026-09-23 from
@@ -112,6 +136,12 @@ therefore undoes three things.
    before its owner has read it".
 3. Once step 3 has the private repo set Telegram secrets on the api, a public
    deploy will remove them, because the Bicep sends each app's full secret list.
+
+This has already cost a real check. The public deploy of `d9556d0` finished at
+10:59:49 UTC on 2026-09-23 and the private workflow that restores the config ran
+from 10:59:53 to 11:01:15. The Job fired at 11:00:00 between them, read the
+placeholder and logged `scheduler run complete, 0 check(s) created`, so there is no
+11:00 uptime run.
 
 One way out is for this repo to stop deploying once the private repo owns the
 deployment, and only build and publish the image. That needs the user's decision.
@@ -238,4 +268,5 @@ uv run ruff check . && uv run ruff format --check .
 uv run pytest
 AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest -m integration -o addopts=
 az bicep build --file infra/main.bicep --stdout > /dev/null
+cd checks && corepack npm@10.9.9 ci && corepack npm@10.9.9 run typecheck && corepack npm@10.9.9 test
 ```
