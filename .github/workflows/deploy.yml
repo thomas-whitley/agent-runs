@@ -105,7 +105,6 @@ jobs:
           MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           MERCURY_BEARER_TOKEN: ${{ secrets.MERCURY_BEARER_TOKEN }}
-          MERCURY_CONFIG_B64: ${{ secrets.MERCURY_CONFIG_B64 }}
         run: |
           url="$(./infra/deploy.sh)"
           echo "url=${url}" >> "$GITHUB_OUTPUT"

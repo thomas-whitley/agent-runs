@@ -34,12 +34,21 @@ param voyageApiKey string = ''
 @secure()
 param mercuryBearerToken string = ''
 
-@description('mercury.yaml, base64 encoded, for the scheduler. The Job is only deployed when this and the bearer token are both set.')
+@description('mercury.yaml, base64 encoded, for the scheduler. Normally empty: the private config repo sets the real one on the Job after this deploys.')
 @secure()
 param mercuryConfigB64 string = ''
 
-// Without both, the scheduler could only start and fail every hour.
-var deployScheduler = !empty(mercuryBearerToken) && !empty(mercuryConfigB64)
+// Without a token the scheduler could only start and fail every hour.
+var deployScheduler = !empty(mercuryBearerToken)
+
+// Per docs/mercury.md the real config lives only in the private repo, whose
+// workflow overwrites this secret with `az containerapp job secret set`. Until
+// it does, the Job runs against no sites and exits having created 0 runs.
+// This deploy puts the placeholder back each time it runs, so the private
+// workflow has to run after it.
+var schedulerConfigB64 = empty(mercuryConfigB64)
+  ? base64('portfolio:\n  sites: []\n')
+  : mercuryConfigB64
 
 var logAnalyticsName = '${name}-logs'
 var environmentName = '${name}-env'
@@ -128,7 +137,7 @@ var sharedSecrets = concat(coreSecrets, optionalSecrets)
 
 // The scheduler makes no model call, so it gets no model or embedding key,
 // and the config goes to it alone. Only used when deployScheduler is true, so
-// neither value can be empty here.
+// the token cannot be empty here.
 var schedulerSecrets = concat(coreSecrets, [
   {
     name: 'mercury-bearer-token'
@@ -136,7 +145,7 @@ var schedulerSecrets = concat(coreSecrets, [
   }
   {
     name: 'mercury-config'
-    value: mercuryConfigB64
+    value: schedulerConfigB64
   }
 ])
 
