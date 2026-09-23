@@ -9,6 +9,7 @@ from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.auth import require_bearer_token
+from app.check_claims import router as check_claims_router
 from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.migrations import apply_migrations
@@ -119,6 +120,8 @@ def create_app() -> FastAPI:
             )
             row = await cursor.fetchone()
         return RunCreated(id=row[0], status=row[1])
+
+    app.include_router(check_claims_router)
 
     @app.get("/runs")
     async def list_runs(
