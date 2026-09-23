@@ -24,9 +24,17 @@ from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.scheduler")
 
+# The api scales to zero, and an hourly Job almost always finds it there.
+# Container Apps holds the first request while a replica starts, so this has
+# to cover a cold start, not only a request. The Job's replicaTimeout is 300.
+CREATE_RUN_TIMEOUT_SECONDS = 60.0
+
 
 def _create_run(
-    api_base_url: str, bearer_token: str, url: str, timeout_seconds: float = 10.0
+    api_base_url: str,
+    bearer_token: str,
+    url: str,
+    timeout_seconds: float = CREATE_RUN_TIMEOUT_SECONDS,
 ) -> str:
     body = json.dumps({"type": "site_check", "inputs": {"task": url}}).encode()
     request = urllib.request.Request(
