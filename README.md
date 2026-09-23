@@ -44,6 +44,7 @@ with a React app, so nothing here is meant to last.
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | green, by full text search |
 | Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` | green |
 | A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context` | green |
+| A scheduled task runs with no client connected | `tests/test_scheduler.py`, and the live Job's log line and run row below | green |
 
 ## Resume, and the test that proves it
 
@@ -286,6 +287,59 @@ and therefore out of scope here. A run that takes longer than that will have its
 stream cut by the platform, and the client has to reconnect with `Last-Event-ID`
 and carry on, which is exactly the path this repo exists to make work. The
 reconnect is free because the events table is the cursor.
+
+## A scheduled run with nobody watching
+
+A Container Apps Job named `agent-runs-scheduler` wakes on the hour, reads the
+site list from `mercury.yaml`, and posts a `site_check` run to the API with the
+bearer token. It then checks the site with a plain HTTP request in the same
+process, writes the result as the run's one step, and closes the run. No model
+is called and no browser is connected. The Job exits when it is done, so it
+costs nothing between runs, and the API and worker stay at zero replicas until
+it wakes them. The worker never claims a `site_check` run, because it would
+otherwise race the scheduler for it and count it against the daily limit.
+
+The real `mercury.yaml` lives in a private repo, whose workflow sets it on the
+Job. This repo's deploy gives the Job a placeholder listing no sites, so the
+private workflow has to run after every public deploy.
+
+The Job's own log line, exactly as Log Analytics holds it for container
+`agent-runs-scheduler`, from an execution started with `az containerapp job start`:
+
+```
+{"timestamp": "2026-09-23T10:16:47.614108+00:00", "level": "INFO", "logger": "agent_runs.scheduler", "message": "scheduled run a9f4b60f-4ff1-4f6f-872e-cbb61a216c62 created with no client", "run_id": "a9f4b60f-4ff1-4f6f-872e-cbb61a216c62"}
+```
+
+The same run from the live `GET /runs`, closed in 84 ms with 0 tokens:
+
+```
+{
+    "id": "a9f4b60f-4ff1-4f6f-872e-cbb61a216c62",
+    "type": "site_check",
+    "provider": null,
+    "executor": null,
+    "status": "succeeded",
+    "tokens": 0,
+    "duration_seconds": 0.083938,
+    "created_at": "2026-09-23T10:16:47.591056+00:00"
+}
+```
+
+A site that fails three checks in a row is suspended until something resumes
+it. A POST the API refuses counts as a failure too, so a wrong or expired token
+suspends the schedule rather than skipping every site each hour with nothing to
+show for it.
+
+```
+tests/test_scheduler.py::test_run_due_checks_creates_a_run_and_writes_its_result PASSED [ 16%]
+tests/test_scheduler.py::test_run_due_checks_records_a_failed_check PASSED [ 33%]
+tests/test_scheduler.py::test_run_due_checks_skips_a_suspended_site PASSED [ 50%]
+tests/test_scheduler.py::test_run_due_checks_suspends_after_the_third_consecutive_failure PASSED [ 66%]
+tests/test_scheduler.py::test_run_due_checks_counts_a_refused_post_as_a_failure PASSED [ 83%]
+tests/test_scheduler.py::test_run_due_checks_logs_the_created_run_with_no_client PASSED [100%]
+
+============================== 6 passed in 4.70s ===============================
+```
 
 ## Observability
 
