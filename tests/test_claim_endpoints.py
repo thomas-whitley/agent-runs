@@ -130,3 +130,82 @@ def test_a_check_whose_lease_expired_is_claimed_again(api, clean_db):
 
     assert response.status_code == 200
     assert response.json()["id"] == run_id
+
+
+def heartbeat(base_url: str, run_id: str, worker_id: str = "checks-1") -> httpx2.Response:
+    return httpx2.post(
+        f"{base_url}/checks/{run_id}/heartbeat", json={"worker_id": worker_id}, headers=AUTH
+    )
+
+
+def age_heartbeat(db_url: str, run_id: str) -> None:
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s",
+            (run_id,),
+        )
+
+
+def seconds_since_heartbeat(db_url: str, run_id: str) -> float:
+    with psycopg.connect(db_url) as conn:
+        return conn.execute(
+            "SELECT extract(epoch FROM now() - heartbeat_at) FROM runs WHERE id = %s", (run_id,)
+        ).fetchone()[0]
+
+
+def test_heartbeat_requires_the_bearer_token(api, clean_db):
+    run_id = insert_run(clean_db)
+
+    response = httpx2.post(f"{api}/checks/{run_id}/heartbeat", json={"worker_id": "checks-1"})
+
+    assert response.status_code == 401
+
+
+def test_heartbeat_extends_the_lease_of_the_worker_that_holds_it(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"])
+    age_heartbeat(clean_db, run_id)
+
+    response = heartbeat(api, run_id)
+
+    assert response.status_code == 200
+    assert response.json()["lease_seconds"] > 0
+    assert seconds_since_heartbeat(clean_db, run_id) < 60
+
+
+def test_heartbeat_from_a_worker_that_does_not_hold_the_check_is_refused(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"], worker_id="checks-1")
+    age_heartbeat(clean_db, run_id)
+
+    response = heartbeat(api, run_id, worker_id="checks-2")
+
+    assert response.status_code == 409
+    assert seconds_since_heartbeat(clean_db, run_id) > 60
+
+
+def test_heartbeat_after_a_takeover_tells_the_old_worker_to_stop(api, clean_db):
+    run_id = insert_run(clean_db)
+    claim(api, ["lighthouse"], worker_id="checks-1")
+    age_heartbeat(clean_db, run_id)
+    claim(api, ["lighthouse"], worker_id="checks-2")
+
+    response = heartbeat(api, run_id, worker_id="checks-1")
+
+    assert response.status_code == 409
+
+
+def test_heartbeat_cannot_keep_a_run_of_another_type_alive(api, clean_db):
+    """Even a pytest run claimed under the same worker id is out of reach."""
+    run_id = insert_run(clean_db, type_="pytest", kind=None)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE runs SET claimed_by = 'checks-1', status = 'running', "
+            "heartbeat_at = now() - interval '10 minutes' WHERE id = %s",
+            (run_id,),
+        )
+
+    response = heartbeat(api, run_id)
+
+    assert response.status_code == 409
+    assert seconds_since_heartbeat(clean_db, run_id) > 60

@@ -8,7 +8,7 @@ other type can be handed out whatever the request says.
 
 import uuid
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, field_validator
 
 from app.auth import require_bearer_token
@@ -39,10 +39,20 @@ WHERE id = (
 RETURNING id, task, check_kind
 """
 
+# Fenced on the worker that holds the claim and on the type, so this token
+# cannot keep any run but its own site_check alive.
+_HEARTBEAT = """
+UPDATE runs
+SET heartbeat_at = now()
+WHERE id = %s
+  AND type = 'site_check'
+  AND claimed_by = %s
+  AND finished_at IS NULL
+"""
 
-class ClaimRequest(BaseModel):
+
+class WorkerRequest(BaseModel):
     worker_id: str
-    kinds: list[str]
 
     @field_validator("worker_id")
     @classmethod
@@ -50,6 +60,10 @@ class ClaimRequest(BaseModel):
         if not value.strip():
             raise ValueError("worker_id must not be blank")
         return value
+
+
+class ClaimRequest(WorkerRequest):
+    kinds: list[str]
 
     @field_validator("kinds")
     @classmethod
@@ -60,6 +74,10 @@ class ClaimRequest(BaseModel):
         if refused:
             raise ValueError(f"not a self hosted check kind: {', '.join(refused)}")
         return value
+
+
+class Lease(BaseModel):
+    lease_seconds: float
 
 
 class ClaimedCheck(BaseModel):
@@ -78,3 +96,13 @@ async def claim_check(claim: ClaimRequest, request: Request):
     if row is None:
         return Response(status_code=204)
     return ClaimedCheck(id=row[0], url=row[1], kind=row[2], lease_seconds=lease_seconds)
+
+
+@router.post("/{run_id}/heartbeat", response_model=Lease)
+async def heartbeat_check(run_id: uuid.UUID, worker: WorkerRequest, request: Request) -> Lease:
+    """409 means this worker no longer holds the check, so it must stop."""
+    async with request.app.state.pool.connection() as conn:
+        cursor = await conn.execute(_HEARTBEAT, (str(run_id), worker.worker_id))
+    if cursor.rowcount != 1:
+        raise HTTPException(status_code=409, detail="this worker does not hold the check")
+    return Lease(lease_seconds=request.app.state.settings.lease_seconds)
