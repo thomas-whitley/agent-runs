@@ -262,7 +262,9 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             custom: {
               type: 'postgresql'
               metadata: {
-                query: 'SELECT count(*) FROM runs WHERE finished_at IS NULL'
+                // site_check runs are opened and closed by the scheduler Job,
+                // and waking the worker for one would only cost replica time.
+                query: 'SELECT count(*) FROM runs WHERE finished_at IS NULL AND type <> \'site_check\''
                 targetQueryValue: '1'
               }
               auth: [
