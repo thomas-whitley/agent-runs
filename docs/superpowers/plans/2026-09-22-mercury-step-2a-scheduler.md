@@ -998,7 +998,7 @@ Add to `docker-compose.yml`, as a sibling of the `worker` service:
     environment:
       ROLE: scheduler
       DATABASE_URL: postgresql://agent:agent@db:5432/agent_runs
-      API_BASE_URL: http://nginx:8000
+      API_BASE_URL: http://proxy:8000
       MERCURY_BEARER_TOKEN: ${MERCURY_BEARER_TOKEN:-}
       MERCURY_CONFIG_PATH: /config/mercury.yaml
     volumes:
@@ -1027,9 +1027,10 @@ MERCURY_CONFIG_PATH=/config/mercury.yaml
 - [ ] **Step 4: Verify manually against compose**
 
 ```bash
+# The api reads the token when `up` starts it, so it has to be exported first.
+export MERCURY_BEARER_TOKEN=local-test-token
 docker compose up --build -d --wait
-MERCURY_BEARER_TOKEN=local-test-token docker compose run --rm \
-  -e MERCURY_BEARER_TOKEN=local-test-token scheduler
+docker compose run --rm scheduler
 ```
 
 Expected: log lines including `scheduled run <uuid> created with no client` for the one site in `config/mercury.sample.yaml`'s `portfolio.sites` (`https://example.com` by default — replace with something reachable, or a path the running compose api itself serves, such as `http://api:8000/health`, if a network call to a real external site is undesirable during this check). Confirm the run shows up:

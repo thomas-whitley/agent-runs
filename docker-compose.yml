@@ -67,3 +67,23 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  # One shot, like the Container Apps Job it stands in for, so it sits behind
+  # a profile and runs with `docker compose run --rm scheduler`, not `up`.
+  # MERCURY_BEARER_TOKEN must match the api's, so export it before `up` too.
+  scheduler:
+    build: .
+    profiles: ["scheduler"]
+    environment:
+      ROLE: scheduler
+      DATABASE_URL: postgresql://agent:agent@db:5432/agent_runs
+      API_BASE_URL: http://proxy:8000
+      MERCURY_BEARER_TOKEN: ${MERCURY_BEARER_TOKEN:-}
+      MERCURY_CONFIG_PATH: /config/mercury.yaml
+    volumes:
+      - ./config/mercury.sample.yaml:/config/mercury.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      proxy:
+        condition: service_healthy
