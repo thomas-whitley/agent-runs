@@ -1,4 +1,5 @@
-// Container Apps on consumption, two apps, one Log Analytics workspace.
+// Container Apps on consumption, two apps, one scheduled Job, one Log
+// Analytics workspace.
 // No database resource: Postgres is Supabase, and its connection string is a
 // secret on both apps. Everything scales to zero, which is what makes it free.
 
@@ -32,6 +33,13 @@ param voyageApiKey string = ''
 @description('Bearer token for every non-public endpoint. Empty fails closed.')
 @secure()
 param mercuryBearerToken string = ''
+
+@description('mercury.yaml, base64 encoded, for the scheduler. The Job is only deployed when this and the bearer token are both set.')
+@secure()
+param mercuryConfigB64 string = ''
+
+// Without both, the scheduler could only start and fail every hour.
+var deployScheduler = !empty(mercuryBearerToken) && !empty(mercuryConfigB64)
 
 var logAnalyticsName = '${name}-logs'
 var environmentName = '${name}-env'
@@ -105,19 +113,32 @@ var optionalSecrets = concat(
       ]
 )
 
-var sharedSecrets = concat(
-  [
-    {
-      name: 'database-url'
-      value: databaseUrl
-    }
-    {
-      name: 'insights-connection-string'
-      value: insights.properties.ConnectionString
-    }
-  ],
-  optionalSecrets
-)
+var coreSecrets = [
+  {
+    name: 'database-url'
+    value: databaseUrl
+  }
+  {
+    name: 'insights-connection-string'
+    value: insights.properties.ConnectionString
+  }
+]
+
+var sharedSecrets = concat(coreSecrets, optionalSecrets)
+
+// The scheduler makes no model call, so it gets no model or embedding key,
+// and the config goes to it alone. Only used when deployScheduler is true, so
+// neither value can be empty here.
+var schedulerSecrets = concat(coreSecrets, [
+  {
+    name: 'mercury-bearer-token'
+    value: mercuryBearerToken
+  }
+  {
+    name: 'mercury-config'
+    value: mercuryConfigB64
+  }
+])
 
 // An env var referring to a secret that was left out fails the same way.
 var modelEnvironment = concat(
@@ -281,6 +302,63 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+resource scheduler 'Microsoft.App/jobs@2024-03-01' = if (deployScheduler) {
+  name: '${name}-scheduler'
+  location: location
+  properties: {
+    environmentId: environment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // Hourly, matching config/mercury.sample.yaml's site_uptime. Reading a
+      // cron per entry from mercury.yaml waits until a second schedule needs
+      // a different cadence.
+      scheduleTriggerConfig: {
+        cronExpression: '0 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      replicaTimeout: 300
+      replicaRetryLimit: 0
+      secrets: schedulerSecrets
+    }
+    template: {
+      containers: [
+        {
+          name: 'scheduler'
+          image: image
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: concat(sharedEnvironment, [
+            {
+              name: 'ROLE'
+              value: 'scheduler'
+            }
+            {
+              name: 'OTEL_SERVICE_NAME'
+              value: '${name}-scheduler'
+            }
+            {
+              name: 'API_BASE_URL'
+              value: 'https://${api.properties.configuration.ingress.fqdn}'
+            }
+            {
+              name: 'MERCURY_BEARER_TOKEN'
+              secretRef: 'mercury-bearer-token'
+            }
+            {
+              name: 'MERCURY_CONFIG_B64'
+              secretRef: 'mercury-config'
+            }
+          ])
+        }
+      ]
+    }
+  }
+}
+
 output apiUrl string = 'https://${api.properties.configuration.ingress.fqdn}'
 output apiName string = api.name
 output workerName string = worker.name
+output schedulerName string = deployScheduler ? scheduler.name : ''

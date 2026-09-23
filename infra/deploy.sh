@@ -26,6 +26,7 @@ az deployment group create \
       modelApiKey="${MODEL_API_KEY:-}" \
       voyageApiKey="${VOYAGE_API_KEY:-}" \
       mercuryBearerToken="${MERCURY_BEARER_TOKEN:-}" \
+      mercuryConfigB64="${MERCURY_CONFIG_B64:-}" \
   --output none
 
 az deployment group show \
