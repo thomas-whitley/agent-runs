@@ -49,6 +49,31 @@ jobs:
       - name: Pytest
         run: uv run pytest
 
+  # checks/ is its own npm project with no workspace. Lighthouse is stubbed in
+  # these tests, so no Chrome is needed here.
+  checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: checks
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: checks/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm test
+
   compose:
     runs-on: ubuntu-latest
     steps:
