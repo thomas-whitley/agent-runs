@@ -52,6 +52,21 @@ def test_claim_next_run_takes_a_pending_run_once(migrated_db):
     assert claim_next_run(migrated_db, "worker-b") is None
 
 
+def test_claim_next_run_leaves_site_check_runs_to_the_scheduler(migrated_db):
+    """The scheduler creates and closes site_check runs itself. Six older ones
+    fill more than the claim query's LIMIT 5, so filtering after the query
+    would still miss the pytest run behind them."""
+    for _ in range(6):
+        migrated_db.execute(
+            "INSERT INTO runs (task, type, created_at) "
+            "VALUES ('https://example.com', 'site_check', now() - interval '1 minute')"
+        )
+    pytest_run = new_run(migrated_db)
+
+    assert claim_next_run(migrated_db, "worker-a") == pytest_run
+    assert claim_next_run(migrated_db, "worker-b") is None
+
+
 def test_claim_next_run_returns_none_when_there_is_nothing_to_do(migrated_db):
     assert claim_next_run(migrated_db, "worker-a") is None
 

@@ -26,10 +26,13 @@ logger = logging.getLogger("agent_runs.worker")
 _RUNNABLE_TYPES = {"pytest"}
 
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
-# lease. The second case is a worker that was killed outright.
+# lease. The second case is a worker that was killed outright. site_check runs
+# are never claimed here: the scheduler creates and closes them itself, and a
+# claim would count them against the daily limit.
 _CLAIMABLE = """
 SELECT id FROM runs
 WHERE finished_at IS NULL
+  AND type <> 'site_check'
   AND (
         (status = 'pending' AND claimed_by IS NULL)
         OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %s))
