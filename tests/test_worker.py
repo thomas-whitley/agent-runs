@@ -98,6 +98,20 @@ def test_runs_started_today_ignores_earlier_days(migrated_db):
     assert runs_started_today(migrated_db) == 1
 
 
+def test_runs_started_today_ignores_site_checks(migrated_db):
+    """A checks worker claims site_check runs too. They make no model call,
+    so counting them would let weekly checks use up the public daily limit."""
+    migrated_db.execute(
+        "INSERT INTO runs (task, type, check_kind, claimed_by) "
+        "VALUES ('https://example.com', 'site_check', 'lighthouse', 'checks-1')"
+    )
+    migrated_db.execute(
+        "INSERT INTO runs (task, claimed_by) VALUES (%s, %s)", (PASSING_TEST, "worker-a")
+    )
+
+    assert runs_started_today(migrated_db) == 1
+
+
 def test_the_daily_limit_refuses_the_run_and_closes_its_stream(migrated_db):
     settings = settings_with(max_runs_per_day=2)
 

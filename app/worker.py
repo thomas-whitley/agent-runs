@@ -41,9 +41,13 @@ ORDER BY created_at
 LIMIT 5
 """
 
+# site_check makes no model call, and the checks worker claims it too, so it
+# is left out of the limit that protects the model key.
 _STARTED_TODAY = """
 SELECT count(*) FROM runs
-WHERE claimed_by IS NOT NULL AND created_at >= date_trunc('day', now())
+WHERE claimed_by IS NOT NULL
+  AND type <> 'site_check'
+  AND created_at >= date_trunc('day', now())
 """
 
 
