@@ -34,3 +34,10 @@ _TYPES = (
 )
 
 TASK_TYPES: dict[str, TaskType] = {task_type.name: task_type for task_type in _TYPES}
+
+# The kinds a site_check can be. uptime is plain HTTP, run and closed by the
+# scheduler Job in the cloud. The other two need a browser, so only the self
+# hosted checks worker runs them, through the claim endpoints.
+CHECK_KINDS = ("uptime", "lighthouse", "broken_links")
+DEFAULT_CHECK_KIND = "uptime"
+SELF_HOSTED_CHECK_KINDS = ("lighthouse", "broken_links")

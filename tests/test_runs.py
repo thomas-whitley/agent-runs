@@ -193,3 +193,71 @@ def test_events_of_a_public_run_never_require_a_token(start_server, monkeypatch)
 
     with httpx2.stream("GET", f"{base_url}/runs/{created['id']}/events") as response:
         assert response.status_code == 200
+
+
+def _post_site_check(base_url: str, inputs: dict) -> httpx2.Response:
+    return httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "site_check", "inputs": inputs},
+        headers={"Authorization": "Bearer the-real-token"},
+    )
+
+
+def test_a_site_check_stores_the_kind_it_was_posted_with(start_server, clean_db, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = _post_site_check(base_url, {"task": "https://example.com", "kind": "lighthouse"})
+
+    assert response.status_code == 201
+    with psycopg.connect(clean_db) as conn:
+        kind = conn.execute(
+            "SELECT check_kind FROM runs WHERE id = %s", (response.json()["id"],)
+        ).fetchone()[0]
+    assert kind == "lighthouse"
+
+
+def test_a_site_check_posted_with_no_kind_is_an_uptime_check(start_server, clean_db, monkeypatch):
+    """What the scheduler posts, and what it closes itself."""
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = _post_site_check(base_url, {"task": "https://example.com"})
+
+    with psycopg.connect(clean_db) as conn:
+        kind = conn.execute(
+            "SELECT check_kind FROM runs WHERE id = %s", (response.json()["id"],)
+        ).fetchone()[0]
+    assert kind == "uptime"
+
+
+def test_post_runs_rejects_an_unknown_check_kind(start_server, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    base_url = start_server()
+
+    response = _post_site_check(base_url, {"task": "https://example.com", "kind": "pentest"})
+
+    assert response.status_code == 422
+
+
+def test_post_runs_rejects_a_check_kind_on_a_type_that_is_not_a_check(start_server):
+    base_url = start_server()
+
+    response = httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "pytest", "inputs": {"task": "x", "kind": "lighthouse"}},
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_run_that_is_not_a_check_has_no_check_kind(start_server, clean_db):
+    base_url = start_server()
+
+    response = httpx2.post(f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}})
+
+    with psycopg.connect(clean_db) as conn:
+        kind = conn.execute(
+            "SELECT check_kind FROM runs WHERE id = %s", (response.json()["id"],)
+        ).fetchone()[0]
+    assert kind is None

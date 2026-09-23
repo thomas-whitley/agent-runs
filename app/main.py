@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from psycopg_pool import AsyncConnectionPool
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from app.auth import require_bearer_token
 from app.config import load_settings
@@ -14,7 +14,7 @@ from app.logging_setup import configure_logging
 from app.migrations import apply_migrations
 from app.run_list import DEFAULT_LIMIT, MAX_LIMIT, build_query, encode_cursor, serialize_run_row
 from app.stream import event_stream, parse_last_event_id
-from app.tasks import TASK_TYPES
+from app.tasks import CHECK_KINDS, DEFAULT_CHECK_KIND, TASK_TYPES
 from app.telemetry import configure_telemetry, start_run_trace
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -40,6 +40,23 @@ class RunRequest(BaseModel):
         if not isinstance(task, str) or not task.strip():
             raise ValueError("inputs.task must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def only_a_check_has_a_kind(self) -> "RunRequest":
+        kind = self.inputs.get("kind")
+        if kind is None:
+            return self
+        if self.type != "site_check":
+            raise ValueError("inputs.kind is only for site_check")
+        if kind not in CHECK_KINDS:
+            raise ValueError(f"unknown check kind {kind!r}")
+        return self
+
+    @property
+    def check_kind(self) -> str | None:
+        if self.type != "site_check":
+            return None
+        return self.inputs.get("kind", DEFAULT_CHECK_KIND)
 
 
 class RunCreated(BaseModel):
@@ -90,9 +107,15 @@ def create_app() -> FastAPI:
         trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(
-                "INSERT INTO runs (task, type, provider, trace_context) "
-                "VALUES (%s, %s, %s, %s) RETURNING id, status",
-                (run.inputs["task"].strip(), run.type, task_type.provider, trace_context),
+                "INSERT INTO runs (task, type, provider, trace_context, check_kind) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING id, status",
+                (
+                    run.inputs["task"].strip(),
+                    run.type,
+                    task_type.provider,
+                    trace_context,
+                    run.check_kind,
+                ),
             )
             row = await cursor.fetchone()
         return RunCreated(id=row[0], status=row[1])
