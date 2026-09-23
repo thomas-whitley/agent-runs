@@ -143,6 +143,21 @@ which is the database the running stack serves from. Pointing the unit tests at
 fixtures refuse a non local host unless `ALLOW_REMOTE_TEST_DB` is set, because they
 drop the public schema and `.env` holds a real Supabase URL.
 
+### Running the tests on the Windows machine
+
+The suite does not run natively on Windows, because psycopg's async pool refuses
+the default Proactor event loop. Run it in the Ubuntu WSL distro, with a Linux venv
+kept out of the repo's Windows `.venv`, while Docker Desktop serves the compose
+Postgres on `localhost:5432`.
+
+```
+wsl -d Ubuntu-24.04 -- bash -lc 'cd /mnt/c/Projects/agent-runs && UV_PROJECT_ENVIRONMENT=$HOME/.venvs/agent-runs UV_LINK_MODE=copy ~/.local/bin/uv run pytest'
+```
+
+Git for Windows sets `core.autocrlf=true`, which gave `docker/entrypoint.sh` CRLF
+line endings and made every container exit with `no such file or directory`.
+`.gitattributes` now pins `*.sh` to LF.
+
 ### Streaming tests need a real socket
 
 `tests/test_resume.py` and the others run against a real uvicorn on a real port,
