@@ -25,6 +25,7 @@ az deployment group create \
       modelBaseUrl="${MODEL_BASE_URL:-}" \
       modelApiKey="${MODEL_API_KEY:-}" \
       voyageApiKey="${VOYAGE_API_KEY:-}" \
+      pagespeedApiKey="${PAGESPEED_API_KEY:-}" \
       mercuryBearerToken="${MERCURY_BEARER_TOKEN:-}" \
       mercuryConfigB64="${MERCURY_CONFIG_B64:-}" \
   --output none

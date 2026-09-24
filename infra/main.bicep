@@ -34,6 +34,13 @@ param voyageApiKey string = ''
 @secure()
 param mercuryBearerToken string = ''
 
+@description('PageSpeed Insights key for the cloud Lighthouse fallback. Empty sends keyless requests, whose shared quota is often spent.')
+@secure()
+param pagespeedApiKey string = ''
+
+@description('Seconds a Lighthouse check waits for the self hosted worker before the cloud worker takes it.')
+param checkClaimWindowSeconds int = 1800
+
 @description('mercury.yaml, base64 encoded, for the scheduler. The private config repo, which runs this template, passes its real one.')
 @secure()
 param mercuryConfigB64 string = ''
@@ -132,6 +139,48 @@ var coreSecrets = [
 ]
 
 var sharedSecrets = concat(coreSecrets, optionalSecrets)
+
+// The worker alone calls PageSpeed, so the key goes to it alone.
+var workerSecrets = concat(
+  sharedSecrets,
+  empty(pagespeedApiKey)
+    ? []
+    : [
+        {
+          name: 'pagespeed-api-key'
+          value: pagespeedApiKey
+        }
+      ]
+)
+
+var workerCheckEnvironment = concat(
+  [
+    {
+      name: 'CHECK_CLAIM_WINDOW'
+      value: string(checkClaimWindowSeconds)
+    }
+  ],
+  empty(pagespeedApiKey)
+    ? []
+    : [
+        {
+          name: 'PAGESPEED_API_KEY'
+          secretRef: 'pagespeed-api-key'
+        }
+      ]
+)
+
+// DEFAULT_LEASE_SECONDS in app/config.py. The worker gets no LEASE_SECONDS, so
+// this has to match that default.
+var leaseSeconds = 120
+
+// What wakes the worker: any unfinished run it executes, a Lighthouse check
+// that waited out the claim window (from creation, or from a lapsed lease),
+// and a check the cloud path is running, so the worker is not scaled away
+// mid call. A check still inside its window does not count, or the worker
+// would sit awake for the whole window every week. This mirrors _CLAIMABLE in
+// app/worker.py.
+var pendingWorkQuery = 'SELECT count(*) FROM runs WHERE finished_at IS NULL AND (type <> \'site_check\' OR (type = \'site_check\' AND check_kind = \'lighthouse\' AND (executor = \'cloud\' OR (claimed_by IS NULL AND created_at < now() - make_interval(secs => ${checkClaimWindowSeconds})) OR (status = \'running\' AND heartbeat_at < now() - make_interval(secs => ${leaseSeconds + checkClaimWindowSeconds})))))'
 
 // The scheduler makes no model call, so it gets no model or embedding key,
 // and the config goes to it alone. Only used when deployScheduler is true, so
@@ -258,7 +307,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: environment.id
     configuration: {
-      secrets: sharedSecrets
+      secrets: workerSecrets
     }
     template: {
       containers: [
@@ -278,7 +327,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'OTEL_SERVICE_NAME'
               value: '${name}-worker'
             }
-          ], modelEnvironment)
+          ], modelEnvironment, workerCheckEnvironment)
         }
       ]
       scale: {
@@ -290,9 +339,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             custom: {
               type: 'postgresql'
               metadata: {
-                // site_check runs are opened and closed by the scheduler Job,
-                // and waking the worker for one would only cost replica time.
-                query: 'SELECT count(*) FROM runs WHERE finished_at IS NULL AND type <> \'site_check\''
+                query: pendingWorkQuery
                 targetQueryValue: '1'
               }
               auth: [
