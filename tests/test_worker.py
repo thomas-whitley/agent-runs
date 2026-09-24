@@ -284,3 +284,96 @@ def test_a_vector_retriever_exposes_its_embedder():
     embedder = VoyageEmbedder("not-a-real-key")
 
     assert VectorRetriever(embedder).embedder is embedder
+
+
+# The cloud fallback, per docs/mercury.md: a self hosted check nobody claims
+# within the window goes to the cloud path, and a lapsed lease starts the
+# window again. A small window keeps the ages in these tests readable.
+WINDOW = 600.0
+
+
+def new_check(conn, kind: str = "lighthouse", age: str = "0 seconds") -> str:
+    return conn.execute(
+        "INSERT INTO runs (task, type, check_kind, created_at) "
+        "VALUES ('https://example.com', 'site_check', %s, now() - %s::interval) RETURNING id",
+        (kind, age),
+    ).fetchone()[0]
+
+
+def claim_for_cloud(conn, worker_id: str = "worker-a") -> str | None:
+    return claim_next_run(conn, worker_id, lease_seconds=60, check_claim_window_seconds=WINDOW)
+
+
+def test_claim_next_run_takes_a_check_nobody_claimed_within_the_window(migrated_db):
+    check = new_check(migrated_db, age="11 minutes")
+
+    assert claim_for_cloud(migrated_db) == check
+
+
+def test_claim_next_run_leaves_a_check_still_inside_the_window(migrated_db):
+    new_check(migrated_db, age="9 minutes")
+
+    assert claim_for_cloud(migrated_db) is None
+
+
+@pytest.mark.parametrize("kind", ["broken_links", "lighthouse"])
+def test_claim_next_run_takes_both_self_hosted_kinds(migrated_db, kind):
+    check = new_check(migrated_db, kind=kind, age="11 minutes")
+
+    assert claim_for_cloud(migrated_db) == check
+
+
+def test_claim_next_run_never_takes_an_uptime_check_however_old(migrated_db):
+    """The scheduler opens and closes uptime checks itself."""
+    new_check(migrated_db, kind="uptime", age="1 day")
+
+    assert claim_for_cloud(migrated_db) is None
+
+
+def test_a_lapsed_lease_starts_the_window_again(migrated_db):
+    """The self hosted worker stopped reporting 5 minutes ago. Its 60 second
+    lease lapsed 4 minutes ago, which is inside the 10 minute window, so the
+    check waits for a self hosted worker to take it again."""
+    check = new_check(migrated_db, age="1 hour")
+    migrated_db.execute(
+        "UPDATE runs SET claimed_by = 'laptop', status = 'running', executor = 'self_hosted', "
+        "heartbeat_at = now() - interval '5 minutes' WHERE id = %s",
+        (check,),
+    )
+
+    assert claim_for_cloud(migrated_db) is None
+
+
+def test_a_check_whose_lease_lapsed_a_window_ago_goes_to_the_cloud(migrated_db):
+    check = new_check(migrated_db, age="1 hour")
+    migrated_db.execute(
+        "UPDATE runs SET claimed_by = 'laptop', status = 'running', executor = 'self_hosted', "
+        "heartbeat_at = now() - interval '12 minutes' WHERE id = %s",
+        (check,),
+    )
+
+    assert claim_for_cloud(migrated_db) == check
+
+
+def test_a_check_taken_over_from_the_laptop_shows_the_cloud_executor(migrated_db):
+    """GET /runs shows which executor ran a check, and that listing is the
+    proof for the fallback claim, so a takeover must not keep self_hosted."""
+    check = new_check(migrated_db, age="1 hour")
+    migrated_db.execute(
+        "UPDATE runs SET claimed_by = 'laptop', status = 'running', executor = 'self_hosted', "
+        "heartbeat_at = now() - interval '12 minutes' WHERE id = %s",
+        (check,),
+    )
+    claim_for_cloud(migrated_db)
+
+    executor = migrated_db.execute("SELECT executor FROM runs WHERE id = %s", (check,)).fetchone()
+    assert executor == ("cloud",)
+
+
+def test_a_pytest_run_claimed_by_the_worker_has_no_executor(migrated_db):
+    """executor is only written for checks."""
+    run_id = new_run(migrated_db)
+    claim_for_cloud(migrated_db)
+
+    executor = migrated_db.execute("SELECT executor FROM runs WHERE id = %s", (run_id,)).fetchone()
+    assert executor == (None,)

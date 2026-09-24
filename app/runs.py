@@ -11,15 +11,19 @@ from psycopg.types.json import Jsonb
 
 _CLAIM_UNCLAIMED = """
 UPDATE runs
-SET claimed_by = %s, status = 'running', heartbeat_at = now()
+SET claimed_by = %s, status = 'running', heartbeat_at = now(),
+    executor = CASE WHEN type = 'site_check' THEN 'cloud' ELSE executor END
 WHERE id = %s AND claimed_by IS NULL AND finished_at IS NULL
 """
 
 # A run is also claimable when its worker stopped reporting. finished_at guards
-# against reclaiming something that already completed.
+# against reclaiming something that already completed. A site_check claimed
+# here runs on the cloud path, including one taken over from the self hosted
+# worker, so GET /runs says which executor finished it.
 _CLAIM_OR_TAKE_OVER = """
 UPDATE runs
-SET claimed_by = %s, status = 'running', heartbeat_at = now()
+SET claimed_by = %s, status = 'running', heartbeat_at = now(),
+    executor = CASE WHEN type = 'site_check' THEN 'cloud' ELSE executor END
 WHERE id = %s
   AND finished_at IS NULL
   AND (

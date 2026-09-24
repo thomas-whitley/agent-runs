@@ -14,6 +14,10 @@ DEFAULT_EMBEDDING_MODEL = "voyage-3"
 # step, and a model step can run 112 seconds (4 attempts of 25 seconds plus
 # 2, 4 and 6 second waits). The checks worker heartbeats every 30 seconds.
 DEFAULT_LEASE_SECONDS = 120.0
+# Thirty minutes, per docs/mercury.md. A lighthouse or broken_links check that
+# no self hosted worker claims in this long goes to the cloud PageSpeed path.
+# CHECK_CLAIM_WINDOW is in seconds.
+DEFAULT_CHECK_CLAIM_WINDOW_SECONDS = 1800.0
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,7 @@ class Settings:
     api_base_url: str
     mercury_config_path: str
     embedding_model: str
+    check_claim_window_seconds: float = DEFAULT_CHECK_CLAIM_WINDOW_SECONDS
 
 
 def _default_worker_id() -> str:
@@ -87,4 +92,7 @@ def load_settings() -> Settings:
         api_base_url=os.environ.get("API_BASE_URL", "http://localhost:8000"),
         mercury_config_path=os.environ.get("MERCURY_CONFIG_PATH", "/config/mercury.yaml"),
         embedding_model=os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+        check_claim_window_seconds=float(
+            os.environ.get("CHECK_CLAIM_WINDOW", DEFAULT_CHECK_CLAIM_WINDOW_SECONDS)
+        ),
     )

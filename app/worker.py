@@ -8,7 +8,13 @@ from collections.abc import Callable
 import psycopg
 from opentelemetry import trace
 
-from app.config import DEFAULT_LEASE_SECONDS, PROVIDERS, Settings, load_settings
+from app.config import (
+    DEFAULT_CHECK_CLAIM_WINDOW_SECONDS,
+    DEFAULT_LEASE_SECONDS,
+    PROVIDERS,
+    Settings,
+    load_settings,
+)
 from app.corpus import load_corpus
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
@@ -16,7 +22,7 @@ from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, heartbeat, record_step
-from app.tasks import TASK_TYPES
+from app.tasks import SELF_HOSTED_CHECK_KINDS, TASK_TYPES
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
@@ -26,16 +32,35 @@ logger = logging.getLogger("agent_runs.worker")
 _RUNNABLE_TYPES = {"pytest"}
 
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
-# lease. The second case is a worker that was killed outright. site_check runs
-# are never claimed here: the scheduler creates and closes them itself, and a
-# claim would count them against the daily limit.
+# lease. The second case is a worker that was killed outright.
+#
+# A site_check is claimed here only as the cloud fallback. A lighthouse or
+# broken_links check waits the claim window for the self hosted worker. A lease
+# that lapses puts it back to waiting, so the window then counts from the
+# moment the lease ran out. Uptime checks are never claimed here: the
+# scheduler creates and closes them itself.
 _CLAIMABLE = """
 SELECT id FROM runs
 WHERE finished_at IS NULL
-  AND type <> 'site_check'
   AND (
-        (status = 'pending' AND claimed_by IS NULL)
-        OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %s))
+        (
+          type <> 'site_check'
+          AND (
+                (status = 'pending' AND claimed_by IS NULL)
+                OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %(lease)s))
+              )
+        )
+        OR (
+          type = 'site_check'
+          AND check_kind = ANY(%(cloud_kinds)s)
+          AND (
+                (claimed_by IS NULL AND created_at < now() - make_interval(secs => %(window)s))
+                OR (
+                  status = 'running'
+                  AND heartbeat_at < now() - make_interval(secs => %(lease)s + %(window)s)
+                )
+              )
+        )
       )
 ORDER BY created_at
 LIMIT 5
@@ -56,10 +81,18 @@ def runs_started_today(conn: psycopg.Connection) -> int:
 
 
 def claim_next_run(
-    conn: psycopg.Connection, worker_id: str, lease_seconds: float = DEFAULT_LEASE_SECONDS
+    conn: psycopg.Connection,
+    worker_id: str,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+    check_claim_window_seconds: float = DEFAULT_CHECK_CLAIM_WINDOW_SECONDS,
 ) -> str | None:
     """Claim the oldest claimable run. None means there is nothing to do."""
-    for (run_id,) in conn.execute(_CLAIMABLE, (lease_seconds,)).fetchall():
+    parameters = {
+        "lease": lease_seconds,
+        "window": check_claim_window_seconds,
+        "cloud_kinds": list(SELF_HOSTED_CHECK_KINDS),
+    }
+    for (run_id,) in conn.execute(_CLAIMABLE, parameters).fetchall():
         if claim_run(conn, run_id, worker_id, lease_seconds=lease_seconds):
             return run_id
     return None
@@ -205,7 +238,12 @@ def main() -> None:  # pragma: no cover - the process entry point
 
         while True:
             try:
-                run_id = claim_next_run(conn, settings.worker_id, settings.lease_seconds)
+                run_id = claim_next_run(
+                    conn,
+                    settings.worker_id,
+                    settings.lease_seconds,
+                    settings.check_claim_window_seconds,
+                )
                 if run_id is None:
                     time.sleep(settings.poll_seconds)
                     continue

@@ -26,3 +26,23 @@ def test_claim_next_run_defaults_to_the_same_lease(monkeypatch):
     default = inspect.signature(claim_next_run).parameters["lease_seconds"].default
 
     assert default == load_settings().lease_seconds
+
+
+def test_the_check_claim_window_defaults_to_thirty_minutes(monkeypatch):
+    monkeypatch.delenv("CHECK_CLAIM_WINDOW", raising=False)
+
+    assert load_settings().check_claim_window_seconds == 1800.0
+
+
+def test_the_check_claim_window_is_configurable_in_seconds(monkeypatch):
+    monkeypatch.setenv("CHECK_CLAIM_WINDOW", "300")
+
+    assert load_settings().check_claim_window_seconds == 300.0
+
+
+def test_claim_next_run_defaults_to_the_same_check_claim_window(monkeypatch):
+    monkeypatch.delenv("CHECK_CLAIM_WINDOW", raising=False)
+    parameters = inspect.signature(claim_next_run).parameters
+    default = parameters["check_claim_window_seconds"].default
+
+    assert default == load_settings().check_claim_window_seconds
