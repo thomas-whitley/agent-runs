@@ -378,3 +378,106 @@ def test_a_pytest_run_claimed_by_the_worker_has_no_executor(migrated_db):
 
     executor = migrated_db.execute("SELECT executor FROM runs WHERE id = %s", (run_id,)).fetchone()
     assert executor == (None,)
+
+
+# Running a check the worker took over. check_runner stands in for
+# run_pagespeed, whose own tests are in test_pagespeed.py.
+SUMMARY = {
+    "scores": {"performance": 0.9, "accessibility": 1, "best-practices": 1, "seo": 1},
+    "lcp_ms": 1800,
+    "tbt_ms": 0,
+    "failed_audits": [],
+    "lighthouse_version": "13.0.0",
+    "final_url": "https://example.com/",
+}
+
+
+def claimed_overdue_check(conn) -> str:
+    check = new_check(conn, age="11 minutes")
+    assert claim_next_run(conn, "worker-test", check_claim_window_seconds=WINDOW) == check
+    return check
+
+
+def check_events(conn, check: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT payload FROM events WHERE run_id = %s ORDER BY seq", (check,)
+    ).fetchall()
+    return [payload for (payload,) in rows]
+
+
+def test_a_claimed_check_runs_on_pagespeed_and_closes_with_its_summary(migrated_db):
+    check = claimed_overdue_check(migrated_db)
+    calls = []
+
+    def check_runner(url, api_key):
+        calls.append((url, api_key))
+        return SUMMARY
+
+    process_run(
+        migrated_db,
+        check,
+        settings_with(pagespeed_api_key="psi-key"),
+        check_runner=check_runner,
+    )
+
+    assert calls == [("https://example.com", "psi-key")]
+    status, tokens = migrated_db.execute(
+        "SELECT status, tokens_used FROM runs WHERE id = %s", (check,)
+    ).fetchone()
+    assert (status, tokens) == ("succeeded", 0)
+    assert check_events(migrated_db, check) == [
+        {"kind": "check", "seq": 1, "output": SUMMARY},
+        {"kind": "done", "seq": 2, "output": {"status": "succeeded"}},
+    ]
+
+
+def test_a_pagespeed_failure_still_closes_the_check_with_the_error(migrated_db):
+    """A result is terminal whatever it says, as it is for the checks
+    worker, so a failed call is a finished check that says why."""
+    check = claimed_overdue_check(migrated_db)
+
+    def check_runner(url, api_key):
+        raise ValueError("PageSpeed returned no result: Quota exceeded")
+
+    process_run(migrated_db, check, settings_with(), check_runner=check_runner)
+
+    status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (check,)).fetchone()[0]
+    assert status == "succeeded"
+    first = check_events(migrated_db, check)[0]
+    assert first["output"] == {"error": "PageSpeed returned no result: Quota exceeded"}
+
+
+def test_the_daily_run_limit_does_not_refuse_a_check(migrated_db):
+    """A check makes no model call, so the limit that protects the key skips it."""
+    for _ in range(3):
+        migrated_db.execute("INSERT INTO runs (task, claimed_by) VALUES ('x', 'worker-other')")
+    check = claimed_overdue_check(migrated_db)
+
+    process_run(
+        migrated_db,
+        check,
+        settings_with(max_runs_per_day=1),
+        check_runner=lambda url, api_key: SUMMARY,
+    )
+
+    status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (check,)).fetchone()[0]
+    assert status == "succeeded"
+
+
+def test_a_check_taken_back_during_the_call_is_not_written(migrated_db):
+    """The PageSpeed call can outlast the lease. If another worker took the
+    check meanwhile, this worker's result is dropped rather than written over
+    the other's."""
+    check = claimed_overdue_check(migrated_db)
+
+    def check_runner(url, api_key):
+        migrated_db.execute("UPDATE runs SET claimed_by = 'laptop' WHERE id = %s", (check,))
+        return SUMMARY
+
+    process_run(migrated_db, check, settings_with(), check_runner=check_runner)
+
+    finished = migrated_db.execute(
+        "SELECT finished_at FROM runs WHERE id = %s", (check,)
+    ).fetchone()[0]
+    assert finished is None
+    assert check_events(migrated_db, check) == []

@@ -68,6 +68,7 @@ class Settings:
     mercury_config_path: str
     embedding_model: str
     check_claim_window_seconds: float = DEFAULT_CHECK_CLAIM_WINDOW_SECONDS
+    pagespeed_api_key: str | None = None
 
 
 def _default_worker_id() -> str:
@@ -95,4 +96,5 @@ def load_settings() -> Settings:
         check_claim_window_seconds=float(
             os.environ.get("CHECK_CLAIM_WINDOW", DEFAULT_CHECK_CLAIM_WINDOW_SECONDS)
         ),
+        pagespeed_api_key=os.environ.get("PAGESPEED_API_KEY") or None,
     )

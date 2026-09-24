@@ -46,3 +46,15 @@ def test_claim_next_run_defaults_to_the_same_check_claim_window(monkeypatch):
     default = parameters["check_claim_window_seconds"].default
 
     assert default == load_settings().check_claim_window_seconds
+
+
+def test_the_pagespeed_key_is_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("PAGESPEED_API_KEY", "psi-key")
+
+    assert load_settings().pagespeed_api_key == "psi-key"
+
+
+def test_an_empty_pagespeed_key_counts_as_none(monkeypatch):
+    monkeypatch.setenv("PAGESPEED_API_KEY", "")
+
+    assert load_settings().pagespeed_api_key is None
