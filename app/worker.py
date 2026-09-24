@@ -22,7 +22,7 @@ from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, heartbeat, record_step
-from app.tasks import SELF_HOSTED_CHECK_KINDS, TASK_TYPES
+from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
@@ -34,11 +34,11 @@ _RUNNABLE_TYPES = {"pytest"}
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
 # lease. The second case is a worker that was killed outright.
 #
-# A site_check is claimed here only as the cloud fallback. A lighthouse or
-# broken_links check waits the claim window for the self hosted worker. A lease
-# that lapses puts it back to waiting, so the window then counts from the
-# moment the lease ran out. Uptime checks are never claimed here: the
-# scheduler creates and closes them itself.
+# A site_check is claimed here only as the cloud fallback. A lighthouse check
+# waits the claim window for the self hosted worker. A lease that lapses puts
+# it back to waiting, so the window then counts from the moment the lease ran
+# out. broken_links never falls back, because PageSpeed cannot crawl. Uptime
+# checks are never claimed here: the scheduler creates and closes them itself.
 _CLAIMABLE = """
 SELECT id FROM runs
 WHERE finished_at IS NULL
@@ -90,7 +90,7 @@ def claim_next_run(
     parameters = {
         "lease": lease_seconds,
         "window": check_claim_window_seconds,
-        "cloud_kinds": list(SELF_HOSTED_CHECK_KINDS),
+        "cloud_kinds": list(CLOUD_FALLBACK_CHECK_KINDS),
     }
     for (run_id,) in conn.execute(_CLAIMABLE, parameters).fetchall():
         if claim_run(conn, run_id, worker_id, lease_seconds=lease_seconds):

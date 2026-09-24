@@ -316,11 +316,12 @@ def test_claim_next_run_leaves_a_check_still_inside_the_window(migrated_db):
     assert claim_for_cloud(migrated_db) is None
 
 
-@pytest.mark.parametrize("kind", ["broken_links", "lighthouse"])
-def test_claim_next_run_takes_both_self_hosted_kinds(migrated_db, kind):
-    check = new_check(migrated_db, kind=kind, age="11 minutes")
+def test_claim_next_run_leaves_a_broken_links_check_to_the_laptop_however_old(migrated_db):
+    """PageSpeed cannot crawl, and the crawl lives only in checks/, so an
+    overdue broken_links check waits for the self hosted worker."""
+    new_check(migrated_db, kind="broken_links", age="1 day")
 
-    assert claim_for_cloud(migrated_db) == check
+    assert claim_for_cloud(migrated_db) is None
 
 
 def test_claim_next_run_never_takes_an_uptime_check_however_old(migrated_db):

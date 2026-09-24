@@ -41,3 +41,7 @@ TASK_TYPES: dict[str, TaskType] = {task_type.name: task_type for task_type in _T
 CHECK_KINDS = ("uptime", "lighthouse", "broken_links")
 DEFAULT_CHECK_KIND = "uptime"
 SELF_HOSTED_CHECK_KINDS = ("lighthouse", "broken_links")
+# The kinds the cloud takes over when no self hosted worker claims them in the
+# window. PageSpeed Insights runs Lighthouse but cannot crawl, and the crawl
+# lives only in checks/, so broken_links waits for the self hosted worker.
+CLOUD_FALLBACK_CHECK_KINDS = ("lighthouse",)
