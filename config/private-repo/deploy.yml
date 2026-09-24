@@ -1,6 +1,7 @@
-# .github/workflows/deploy.yml in the private mercury-config repo.
-# Deploys the pinned public image with this repo's mercury.yaml. Shape only;
-# the resource names come from the public repo's infra/main.bicep outputs.
+# The only workflow that deploys. It runs the public repo's Bicep, checked out
+# at the pinned commit, with the image built from that same commit and this
+# repo's mercury.yaml. The public repo only builds and publishes images, so a
+# public push changes nothing live until PUBLIC_SHA is bumped here.
 
 name: Deploy
 
@@ -9,16 +10,20 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 permissions:
   id-token: write
   contents: read
 
 env:
-  IMAGE: ghcr.io/thomas-whitley/mercury:v0.2.0   # bumped by hand, never latest
+  # Bumped by hand, never a branch or latest. A full commit SHA from the public
+  # repo whose Publish workflow has pushed the matching image tag.
+  PUBLIC_SHA: b50186152fa7b234020e5919088ad877df04a4fe
+  PUBLIC_REPO: thomas-whitley/agent-runs
   RESOURCE_GROUP: agent-runs
-  API_APP: agent-runs-api
-  WORKER_APP: agent-runs-worker
-  SCHEDULER_JOB: agent-runs-scheduler
 
 jobs:
   deploy:
@@ -26,9 +31,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Refuse a floating tag
+      - name: Refuse anything but a full commit SHA
         run: |
-          case "$IMAGE" in *:latest|*[!:]) echo "IMAGE must carry a pinned tag" >&2; exit 1;; esac
+          if ! printf '%s' "$PUBLIC_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "PUBLIC_SHA must be a 40 character commit SHA, not '$PUBLIC_SHA'" >&2
+            exit 1
+          fi
+
+      - name: Check out the public repo at the pinned commit
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.PUBLIC_REPO }}
+          ref: ${{ env.PUBLIC_SHA }}
+          path: public
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -37,42 +52,39 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Put the config where the apps read it
+      - name: Deploy the pinned Bicep with the pinned image and this config
+        id: bicep
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MODEL: ${{ vars.MODEL || 'stub' }}
+          MODEL_BASE_URL: ${{ vars.MODEL_BASE_URL }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MERCURY_BEARER_TOKEN: ${{ secrets.MERCURY_BEARER_TOKEN }}
         run: |
-          # The config is small, so it travels as one secret and the image
-          # writes it to /config/mercury.yaml at start. No storage account.
-          CONFIG_B64=$(base64 -w0 mercury.yaml)
-          for app in "$API_APP" "$WORKER_APP"; do
-            az containerapp secret set -g "$RESOURCE_GROUP" -n "$app" \
-              --secrets mercury-config="$CONFIG_B64" \
-                        telegram-bot-token="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-                        telegram-webhook-secret="${{ secrets.TELEGRAM_WEBHOOK_SECRET }}" \
-                        mercury-bearer-token="${{ secrets.MERCURY_BEARER_TOKEN }}" \
-                        mercury-github-token="${{ secrets.MERCURY_GITHUB_TOKEN }}" \
-                        gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
-                        anthropic-api-key="${{ secrets.ANTHROPIC_API_KEY }}" \
-                        database-url="${{ secrets.DATABASE_URL }}"
+          # The Bicep sends each app's full secret list, so a missing secret
+          # here would remove it from the live apps rather than leave it alone.
+          for name in DATABASE_URL MODEL_API_KEY MERCURY_BEARER_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "the Actions secret ${name} is not set" >&2
+              exit 1
+            fi
           done
-          az containerapp job secret set -g "$RESOURCE_GROUP" -n "$SCHEDULER_JOB" \
-            --secrets mercury-config="$CONFIG_B64" \
-                      mercury-bearer-token="${{ secrets.MERCURY_BEARER_TOKEN }}"
-
-      - name: Update the apps and the job to the pinned image
-        run: |
-          az containerapp update -g "$RESOURCE_GROUP" -n "$API_APP" --image "$IMAGE"
-          az containerapp update -g "$RESOURCE_GROUP" -n "$WORKER_APP" --image "$IMAGE"
-          az containerapp job update -g "$RESOURCE_GROUP" -n "$SCHEDULER_JOB" --image "$IMAGE"
-
-      - name: Register the webhook against the deployed URL
-        run: |
-          FQDN=$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.configuration.ingress.fqdn -o tsv)
-          curl --fail --silent --show-error \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/setWebhook" \
-            --data-urlencode "url=https://$FQDN/telegram" \
-            --data-urlencode "secret_token=${{ secrets.TELEGRAM_WEBHOOK_SECRET }}" \
-            --data-urlencode "allowed_updates=[\"message\",\"callback_query\"]" >/dev/null
+          export IMAGE="ghcr.io/${PUBLIC_REPO}:${PUBLIC_SHA}"
+          export MERCURY_CONFIG_B64="$(base64 -w0 mercury.yaml)"
+          url="$(./public/infra/deploy.sh)"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "Deployed ${IMAGE} to ${url}"
 
       - name: Smoke
         run: |
-          FQDN=$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.configuration.ingress.fqdn -o tsv)
-          curl --fail --silent --show-error "https://$FQDN/health" | grep -q '"status":"ok"'
+          url="${{ steps.bicep.outputs.url }}"
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --max-time 20 "${url}/health" | grep -q '"status":"ok"'; then
+              echo "health ok after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "the api never answered /health" >&2
+          exit 1

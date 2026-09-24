@@ -1,4 +1,4 @@
-# Handoff: Mercury steps 2a to 2c done, ready for 2d (2026-09-23, ~22:00 Melbourne)
+# Handoff: Mercury steps 2a to 2c done, deploys moved to the private repo, ready for 2d (2026-09-24, ~11:30 Melbourne)
 
 ## Where things stand
 
@@ -27,9 +27,12 @@ The live API is
 
 The next build step is **2d, the crawl, the fallback and the self hosted
 deployment**, specified in `docs/build-brief-mercury.md`. Its exit turns README claim
-seven green. One decision
-should be made before step 3 and is written up below under "Two deploys write to
-the same resources".
+seven green. The user asked for a PageSpeed Insights API key (free) for the cloud
+fallback, to live in the private repo as `PAGESPEED_API_KEY`. It is not created yet.
+Suggested 2d order, one commit each, test first: the claim window on the Python
+side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links`
+in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
+README row.
 
 ## Read these first
 
@@ -108,43 +111,55 @@ the same resources".
 `thomas-whitley/mercury-config` is private and was created on 2026-09-23 from
 `config/private-repo/`. It holds the real `mercury.yaml`, which lists the live
 API's `/health` as the one site and `thomas-whitley/agent-runs` as the one repo.
-`telegram.chat_id` is still 0 and gets set in step 3. Its workflow sets the config
-on the Job with `az containerapp job secret set` and pins the api, the worker and
-the Job to one public image tag, currently `ea2f791`. Its Actions secrets are only
-the three Azure ids. It signs in as the same app registration as this repo, with
-its own three federated credentials added by `REPO=thomas-whitley/mercury-config
-./scripts/setup-oidc.sh`.
+`telegram.chat_id` is still 0 and gets set in step 3. It signs in as the same app
+registration as this repo, with its own three federated credentials added by
+`REPO=thomas-whitley/mercury-config ./scripts/setup-oidc.sh`. Its workflow and
+`config/private-repo/deploy.yml` are now the same file. Step 3's Telegram secrets
+should become Bicep parameters passed from that workflow, not `az containerapp
+secret set` calls, or the next deploy removes them.
 
-`config/private-repo/deploy.yml` in this repo is still the full template for the
-later steps, and it is out of date. It names `ghcr.io/thomas-whitley/mercury:v0.2.0`,
-an image that does not exist yet, and its floating tag check refused every pinned
-tag (the private repo has the fixed version). Bring it into line when step 3
-touches the private workflow.
+## Only the private repo deploys (decided and done 2026-09-23 and 24)
 
-## Two deploys write to the same resources
+The user decided the private repo owns deployment. This repo's `deploy.yml` now
+runs the two replica test and publishes `ghcr.io/thomas-whitley/agent-runs:<sha>`
+and deploys nothing. `mercury-config`'s workflow (template in
+`config/private-repo/deploy.yml`) checks this repo out at `PUBLIC_SHA`, runs that
+commit's `infra/deploy.sh` with that commit's image, and passes `mercury.yaml` as
+`MERCURY_CONFIG_B64`. It refuses to run if `DATABASE_URL`, `MODEL_API_KEY` or
+`MERCURY_BEARER_TOKEN` is missing, because the Bicep sends each app's full secret
+list and would drop it. `PUBLIC_SHA` is `b501861`. **To ship anything from this
+repo, bump `PUBLIC_SHA` in the private repo after the Publish run for that commit
+is green.** Any Bicep change reaches Azure only that way.
 
-This is unresolved and should be decided before step 3. This repo's Deploy
-workflow runs the full Bicep on every push to `main`. The private repo's
-workflow then changes some of the same resources by hand. Each public deploy
-therefore undoes three things.
+The private repo now has secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`, `DATABASE_URL`, `MODEL_API_KEY` and
+`MERCURY_BEARER_TOKEN`, and variables `MODEL` and `MODEL_BASE_URL`. The bearer
+token is a new one, generated on 2026-09-23 straight into the secret and into the
+local `.env` on the Windows machine (gitignored), where the checks worker will read
+it. This repo's `MERCURY_BEARER_TOKEN`, `MODEL_API_KEY` and `AZURE_*` secrets are
+now unused and stale. `DATABASE_URL` and `DEPLOY_ENABLED` are still read by
+`keepalive.yml`.
 
-1. It puts the Job's placeholder config back. After any push here, run
-   `gh workflow run deploy.yml -R thomas-whitley/mercury-config` or the Job checks no
-   sites until you do.
-2. It moves the api and worker to the newest public image, which breaks the rule in
-   `docs/mercury.md` that "a public commit cannot change what talks to the phone
-   before its owner has read it".
-3. Once step 3 has the private repo set Telegram secrets on the api, a public
-   deploy will remove them, because the Bicep sends each app's full secret list.
+What went wrong on the way, so it is not repeated:
 
-This has already cost a real check. The public deploy of `d9556d0` finished at
-10:59:49 UTC on 2026-09-23 and the private workflow that restores the config ran
-from 10:59:53 to 11:01:15. The Job fired at 11:00:00 between them, read the
-placeholder and logged `scheduler run complete, 0 check(s) created`, so there is no
-11:00 uptime run.
-
-One way out is for this repo to stop deploying once the private repo owns the
-deployment, and only build and publish the image. That needs the user's decision.
+- The first two private deploys took the api down, the second from about 13:25
+  UTC on 2026-09-23 to about 01:00 UTC on 2026-09-24. The pasted `DATABASE_URL`
+  had an unencoded `@` in the password, the api's lifespan hangs on
+  the migrations when it cannot connect, and `/health` never answers. The smoke
+  test reported success because it reached the old revision before traffic moved.
+  Running this repo's Deploy by hand (`gh workflow run deploy.yml`) restored it
+  both times, because it still deploys the old way with the old secrets. That
+  escape hatch goes away when the deploy job is gone, so from then on a bad
+  deploy is fixed by correcting the private secret and rerunning.
+- The fix was a script, kept out of the repo, that reads the string with
+  `getpass`, percent-encodes the password, connects, and only then pipes it into
+  `gh secret set`. An earlier version printed a fragment of the password in a
+  psycopg error. **The user should change the Supabase database password** and
+  set the new string in both repos' `DATABASE_URL`.
+- The smoke test's `curl` had no `--max-time`, so one hung request stalled the job
+  for 22 minutes. It now has `--max-time 20`. It still cannot tell the old
+  revision from the new one. Checking that the latest revision is the one serving
+  is a worthwhile follow up.
 
 ## Suggested skills
 
@@ -163,6 +178,13 @@ second Claude session, not from this machine (`thomaswhitley1535@gmail.com`).
 push. A `digest` run created on the live API at 2026-09-23 00:00:11 UTC and
 refused after 38 seconds is probably that session testing the bearer token. It
 was not investigated.
+
+### The Windows machine has no Azure CLI
+
+This session ran on the Windows machine, which has no `az` on Windows or in WSL and
+no signed in Azure session. Everything Azure went through GitHub Actions. The
+Claude Code auto mode classifier blocked `gh variable set` on the private repo and
+`gh run list` while a deploy was running, so the user ran those with `!`.
 
 ### Test database separation matters
 
@@ -237,11 +259,10 @@ claimed by the checks worker do not use up the daily limit.
 
 ### Deployment settings
 
-Deploy runs when the repo variable `DEPLOY_ENABLED` is `true`, which it is. Repo
-variables are `DEPLOY_ENABLED`, `MODEL` and `MODEL_BASE_URL`. Secrets are
-`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `DATABASE_URL`,
-`MODEL_API_KEY` and `MERCURY_BEARER_TOKEN`. `LIVE_URL` is not set, so the keepalive
-workflow skips its health request and only wakes the database. No secret value has
+Deployment settings live in the private repo now, as described above. This
+repo keeps `DEPLOY_ENABLED` and `DATABASE_URL` for `keepalive.yml`. `LIVE_URL` is
+not set, so the keepalive workflow skips its health request and only wakes the
+database. No secret value has
 been printed in the repo, the logs or the chat.
 
 ### Local compose details

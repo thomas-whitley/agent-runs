@@ -68,7 +68,7 @@ As of Mercury step 1, the provider is chosen per task type rather than by `MODEL
 - One `Dockerfile`; the entrypoint switches on `ROLE`.
 - `docker-compose.yml` runs Postgres with pgvector, two api replicas behind nginx on one port, and one worker. This is where the two replica test runs, locally and in CI.
 - `infra/main.bicep` declares a Container Apps environment on the consumption plan, an `api` app at min 0 max 2 replicas scaling on HTTP concurrency, a `worker` app at min 0 max 1 scaling on a KEDA postgresql query over pending runs, and a Log Analytics workspace. There is no database resource; the connection string is a secret.
-- `.github/workflows/ci.yml` runs lint and tests on every push against the compose Postgres with the stub model. `deploy.yml` builds and pushes the image and updates the apps through an OIDC federated credential, with no stored cloud secret. `keepalive.yml` pings the database and the health endpoint daily so a free tier project does not pause.
+- `.github/workflows/ci.yml` runs lint and tests on every push against the compose Postgres with the stub model. `deploy.yml` runs the two replica test and pushes the image tagged with its commit. It deploys nothing. The private config repo runs `infra/deploy.sh` at a commit it pins, with that commit's image, through an OIDC federated credential with no stored cloud secret. `keepalive.yml` pings the database and the health endpoint daily so a free tier project does not pause.
 - A run is one trace across both roles. `POST /runs` opens a root span and stores its
   W3C `traceparent` on the run row; the worker restores that context as current before
   the loop starts, so its five step spans (plan, retrieve, act, verify, done), each

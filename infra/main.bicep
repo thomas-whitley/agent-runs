@@ -34,18 +34,16 @@ param voyageApiKey string = ''
 @secure()
 param mercuryBearerToken string = ''
 
-@description('mercury.yaml, base64 encoded, for the scheduler. Normally empty: the private config repo sets the real one on the Job after this deploys.')
+@description('mercury.yaml, base64 encoded, for the scheduler. The private config repo, which runs this template, passes its real one.')
 @secure()
 param mercuryConfigB64 string = ''
 
 // Without a token the scheduler could only start and fail every hour.
 var deployScheduler = !empty(mercuryBearerToken)
 
-// Per docs/mercury.md the real config lives only in the private repo, whose
-// workflow overwrites this secret with `az containerapp job secret set`. Until
-// it does, the Job runs against no sites and exits having created 0 runs.
-// This deploy puts the placeholder back each time it runs, so the private
-// workflow has to run after it.
+// Per docs/mercury.md the real config lives only in the private repo, which is
+// the only thing that deploys this template. A deploy by hand without the
+// config gets a placeholder, and the Job then checks no sites.
 var schedulerConfigB64 = empty(mercuryConfigB64)
   ? base64('portfolio:\n  sites: []\n')
   : mercuryConfigB64

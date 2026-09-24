@@ -42,7 +42,7 @@ with a React app, so nothing here is meant to last.
 | Two replicas serve one run; a reconnect to the other replica resumes correctly | `tests/test_two_replicas.py` | green |
 | A retried step that already committed is a no-op | `tests/test_idempotent.py` | green |
 | Retrieval over the corpus feeds the loop | `tests/test_retrieval.py` | green, by full text search |
-| Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` | green |
+| Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` publishes, `config/private-repo/deploy.yml` deploys | green |
 | A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context` | green |
 | A scheduled task runs with no client connected | `tests/test_scheduler.py`, and the live Job's log line and run row below | green |
 
@@ -247,9 +247,12 @@ only now, and the spec records why.
 ## Live on Azure
 
 Deployed by GitHub Actions with an OIDC federated credential, so there is no
-stored cloud secret. The workflow runs the two replica test against compose,
-pushes the image to GHCR, deploys the Bicep, and polls the live health endpoint
-through a cold start.
+stored cloud secret. This repo's `deploy.yml` runs the two replica test against
+compose and pushes the image to GHCR tagged with its commit, and deploys
+nothing. The private config repo's workflow checks this repo out at a commit it
+pins by hand, runs `infra/deploy.sh` with that commit's image and its own
+`mercury.yaml`, and polls the live health endpoint through a cold start. A push
+here changes nothing live until that pin moves.
 
 A run posted to the deployed service, streamed over SSE from Container Apps:
 
@@ -299,9 +302,9 @@ costs nothing between runs, and the API and worker stay at zero replicas until
 it wakes them. The worker never claims a `site_check` run, because it would
 otherwise race the scheduler for it and count it against the daily limit.
 
-The real `mercury.yaml` lives in a private repo, whose workflow sets it on the
-Job. This repo's deploy gives the Job a placeholder listing no sites, so the
-private workflow has to run after every public deploy.
+The real `mercury.yaml` lives in a private repo, whose workflow passes it to the
+Bicep when it deploys. A deploy without it gives the Job a placeholder listing
+no sites.
 
 The Job's own log line, exactly as Log Analytics holds it for container
 `agent-runs-scheduler`, from an execution started with `az containerapp job start`:
