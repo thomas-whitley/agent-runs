@@ -1,0 +1,115 @@
+:root {
+  --bg: #fbfbfa;
+  --fg: #1c1c1a;
+  --muted: #6b6b66;
+  --rule: #e4e3de;
+  --ok: #1f7a4d;
+  --bad: #b3261e;
+  --live: #8a5a00;
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --fg: #ecebe6;
+    --muted: #9a9993;
+    --rule: #2c2c29;
+    --ok: #5cc48f;
+    --bad: #f08a80;
+    --live: #e0b25a;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.6rem;
+}
+
+.lede,
+.note,
+.muted {
+  color: var(--muted);
+}
+
+section {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  padding: 7px 12px 7px 0;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  white-space: nowrap;
+}
+
+th {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.num {
+  text-align: right;
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.status-succeeded {
+  color: var(--ok);
+}
+
+.status-failed,
+.status-error,
+.status-refused {
+  color: var(--bad);
+}
+
+.status-pending,
+.status-running {
+  color: var(--live);
+}
+
+.error {
+  color: var(--bad);
+}
+
+button {
+  margin-top: 16px;
+  padding: 7px 14px;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
