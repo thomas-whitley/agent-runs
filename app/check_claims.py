@@ -15,7 +15,9 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, field_validator
 
 from app.auth import require_bearer_token
+from app.progress import push_progress_async
 from app.tasks import SELF_HOSTED_CHECK_KINDS
+from app.telegram import telegram_client
 
 router = APIRouter(prefix="/checks", dependencies=[Depends(require_bearer_token)])
 
@@ -166,4 +168,7 @@ async def post_check_result(
                 await conn.execute(
                     _INSERT_EVENT, (run, seq, Jsonb({"kind": kind, "seq": seq, "output": output}))
                 )
+    await push_progress_async(
+        request.app.state.pool, run, telegram_client(request.app.state.settings)
+    )
     return done

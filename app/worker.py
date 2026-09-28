@@ -23,10 +23,11 @@ from app.loop import LoopResult, run_agent_loop
 from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.pagespeed import run_pagespeed
+from app.progress import push_progress
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, finish_run, heartbeat, record_step
 from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES
-from app.telegram import telegram_client
+from app.telegram import TelegramClient, telegram_client
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
@@ -198,6 +199,37 @@ def process_run(
     stream.
     """
     task_type_name = _run_type(conn, run_id)
+    telegram = telegram_client(settings)
+    try:
+        return _process_run(
+            conn,
+            run_id,
+            task_type_name,
+            settings,
+            retriever,
+            tracer,
+            model_builder,
+            check_runner,
+            telegram,
+        )
+    finally:
+        # The last word on a run started from Telegram, whichever way it ended.
+        # A chat run edits its own message instead.
+        if task_type_name != "chat":
+            push_progress(conn, run_id, telegram)
+
+
+def _process_run(
+    conn: psycopg.Connection,
+    run_id: str,
+    task_type_name: str,
+    settings: Settings,
+    retriever: Retriever | None,
+    tracer: trace.Tracer | None,
+    model_builder: Callable[[Settings, str], Model],
+    check_runner: Callable[[str, str | None], dict[str, Any]],
+    telegram: TelegramClient | None,
+) -> LoopResult | None:
     # A check makes no model call, so the daily limit that protects the key
     # does not apply to it.
     if task_type_name == "site_check":
@@ -239,7 +271,6 @@ def process_run(
         return None
 
     if task_type_name == "chat":
-        telegram = telegram_client(settings)
         tokens = run_chat(conn, run_id, model, telegram, worker_id=settings.worker_id)
         return LoopResult(status="succeeded", attempts=1, tokens_used=tokens)
 
@@ -249,12 +280,22 @@ def process_run(
         model,
         token_budget=settings.token_budget,
         verify_timeout_seconds=settings.verify_timeout_seconds,
-        on_step=lambda: heartbeat(conn, run_id, settings.worker_id),
+        on_step=lambda: _step_landed(conn, run_id, settings.worker_id, telegram),
         retriever=retriever,
         worker_id=settings.worker_id,
         tracer=tracer,
         provider=task_type.provider,
     )
+
+
+def _step_landed(
+    conn: psycopg.Connection, run_id: str, worker_id: str, telegram: TelegramClient | None
+) -> bool:
+    """Keep the lease, and show the step on Telegram if the run came from there."""
+    held = heartbeat(conn, run_id, worker_id)
+    if held:
+        push_progress(conn, run_id, telegram)
+    return held
 
 
 def main() -> None:  # pragma: no cover - the process entry point
