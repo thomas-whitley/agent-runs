@@ -33,3 +33,23 @@ def test_load_mercury_config_defaults_to_no_sites_when_the_section_is_missing(tm
 def test_load_mercury_config_raises_when_the_file_is_missing(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_mercury_config(tmp_path / "does-not-exist.yaml")
+
+
+def test_load_mercury_config_reads_the_pages_for_weekly_browser_checks(tmp_path):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {"portfolio": {"sites": ["https://a.example/health"], "pages": ["https://a.example/"]}}
+        )
+    )
+
+    config = load_mercury_config(config_file)
+
+    assert config.pages == ("https://a.example/",)
+
+
+def test_load_mercury_config_defaults_to_no_pages(tmp_path):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(yaml.dump({"portfolio": {"sites": ["https://a.example"]}}))
+
+    assert load_mercury_config(config_file).pages == ()

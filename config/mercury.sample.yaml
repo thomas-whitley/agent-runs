@@ -44,13 +44,16 @@ portfolio:
   repos:
     - owner/repo-one
     - owner/repo-two
-  sites:
+  sites:                # uptime, hourly, plain HTTP from the scheduler Job
     - https://example.com
+  pages:                # Lighthouse and the broken link crawl, weekly, on the self hosted worker
+    - https://example.com/
 
 schedule:
   site_uptime: "0 * * * *"      # hourly, plain HTTP
   ci_watch: "5 * * * *"         # hourly, GitHub Actions API
-  lighthouse: "0 3 * * 1"       # weekly, PageSpeed Insights API
+  # lighthouse and broken_links have no cron line: each is due 7 days after the
+  # last one for its page, and the hourly Job creates it (app/scheduler.py).
   dependency_audit: "0 4 * * 1"
   stale_triage: "0 5 * * 1"
   digest: "30 7 * * *"          # local time above

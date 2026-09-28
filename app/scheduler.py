@@ -1,9 +1,14 @@
 """ROLE=scheduler: a Container Apps Job that wakes on a cron trigger, checks
-the configured sites, and exits. It creates each run through the API with
-the bearer token, so the run exists with no client attached to watch it,
-then executes and closes the run itself in the same process. A plain HTTP
-check needs no browser and no separate worker, and the agent loop worker
-never claims site_check runs (see _CLAIMABLE in app/worker.py).
+the configured sites, creates any weekly browser check that is due, and
+exits. It creates each uptime run through the API with the bearer token, so
+the run exists with no client attached to watch it, then executes and closes
+the run itself in the same process. A plain HTTP check needs no browser and
+no separate worker, and the agent loop worker never claims uptime runs (see
+_CLAIMABLE in app/worker.py).
+
+The weekly lighthouse and broken_links checks are only created here. The
+self hosted checks worker claims them, and a lighthouse check nobody claims
+within the window falls back to PageSpeed on the Python worker.
 """
 
 import json
@@ -20,6 +25,7 @@ from app.mercury_config import load_mercury_config
 from app.migrations import apply_migrations
 from app.runs import finish_run, record_step
 from app.schedule_state import is_suspended, record_failure, record_success
+from app.tasks import SELF_HOSTED_CHECK_KINDS
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.scheduler")
@@ -29,14 +35,29 @@ logger = logging.getLogger("agent_runs.scheduler")
 # to cover a cold start, not only a request. The Job's replicaTimeout is 300.
 CREATE_RUN_TIMEOUT_SECONDS = 60.0
 
+# A weekly check is due when none of its kind for its page was created in
+# this long. Counting from the last one, rather than reading a cron day,
+# means an hourly Job that missed its slot catches up on the next run.
+WEEKLY_INTERVAL = "7 days"
+
+_LAST_CHECK_IS_RECENT = """
+SELECT EXISTS (
+    SELECT 1 FROM runs
+    WHERE type = 'site_check' AND check_kind = %s AND task = %s
+      AND created_at > now() - %s::interval
+)
+"""
+
 
 def _create_run(
     api_base_url: str,
     bearer_token: str,
     url: str,
     timeout_seconds: float = CREATE_RUN_TIMEOUT_SECONDS,
+    kind: str | None = None,
 ) -> str:
-    body = json.dumps({"type": "site_check", "inputs": {"task": url}}).encode()
+    inputs = {"task": url} if kind is None else {"task": url, "kind": kind}
+    body = json.dumps({"type": "site_check", "inputs": inputs}).encode()
     request = urllib.request.Request(
         f"{api_base_url}/runs",
         data=body,
@@ -103,6 +124,36 @@ def run_due_checks(
     return created
 
 
+def schedule_weekly_checks(
+    conn: psycopg.Connection,
+    pages: tuple[str, ...],
+    api_base_url: str,
+    bearer_token: str,
+) -> list[str]:
+    """Create a lighthouse and a broken_links check for every page that has
+    not had one of that kind this week. Returns the ids of the runs created."""
+    created: list[str] = []
+
+    for url in pages:
+        for kind in SELF_HOSTED_CHECK_KINDS:
+            recent = conn.execute(_LAST_CHECK_IS_RECENT, (kind, url, WEEKLY_INTERVAL)).fetchone()[0]
+            if recent:
+                continue
+            # Not counted against a schedule: the uptime checks already
+            # suspend on a refused POST, and the next hour tries again.
+            try:
+                run_id = _create_run(api_base_url, bearer_token, url, kind=kind)
+            except OSError:
+                logger.exception("could not create a weekly %s check for %s", kind, url)
+                continue
+            logger.info(
+                "scheduled weekly %s check %s for %s", kind, run_id, url, extra={"run_id": run_id}
+            )
+            created.append(run_id)
+
+    return created
+
+
 def main() -> None:  # pragma: no cover - the process entry point
     configure_logging()
     settings = load_settings()
@@ -117,6 +168,9 @@ def main() -> None:  # pragma: no cover - the process entry point
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
         created = run_due_checks(
             conn, config.sites, settings.api_base_url, settings.mercury_bearer_token
+        )
+        created += schedule_weekly_checks(
+            conn, config.pages, settings.api_base_url, settings.mercury_bearer_token
         )
 
     logger.info("scheduler run complete, %s check(s) created", len(created))
