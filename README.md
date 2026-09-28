@@ -39,6 +39,7 @@ The API serves a built page from `web/dist` at `/`. It is registered after every
 | Deployed to Azure Container Apps by GitHub Actions with OIDC | `.github/workflows/deploy.yml` publishes, `config/private-repo/deploy.yml` deploys | green |
 | A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context` | green |
 | A scheduled task runs with no client connected | `tests/test_scheduler.py`, and the live Job's log line and run row below | green |
+| A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | `tests/test_checks_integration.py` in CI's compose job, and `tests/test_scheduler.py` for the weekly schedule | green |
 
 ## Resume, and the test that proves it
 
@@ -336,6 +337,37 @@ tests/test_scheduler.py::test_run_due_checks_counts_a_refused_post_as_a_failure 
 tests/test_scheduler.py::test_run_due_checks_logs_the_created_run_with_no_client PASSED [100%]
 
 ============================== 6 passed in 4.70s ===============================
+```
+
+## A weekly check on a self hosted worker, with a cloud fallback
+
+Lighthouse and the broken link crawl need a real browser, so they run in `checks/`, a Node 22 worker on a machine of my own rather than in the API image. For each page listed under `portfolio.pages` in `mercury.yaml`, the hourly scheduler Job posts a `lighthouse` and a `broken_links` check whenever none of that kind was created for that page in the last 7 days, and leaves them pending. The worker claims them through `POST /checks/claim` with the bearer token, which cannot claim any other run type, runs them, and posts a summary of about 1 KB.
+
+A pending `lighthouse` check that no self hosted worker claims within `CHECK_CLAIM_WINDOW`, 30 minutes by default, is taken by the Python worker and run on the PageSpeed Insights API. A `broken_links` check never falls back, because PageSpeed cannot crawl, so it waits for the machine to wake. A posted result closes the check whatever it says.
+
+The crawl follows same origin links breadth first to depth 3 and 200 pages, with a 10 second timeout per request, skips what `robots.txt` disallows, and reports only 4xx, 5xx, timeouts and refused connections, keeping the first 50 with the page each was found on. On the machine that runs it, `docker compose -f checks/compose.yml up -d --build` starts the worker with Chromium and `restart: unless-stopped`, reading `API_BASE_URL` and `MERCURY_BEARER_TOKEN` from a gitignored `.env` beside it.
+
+`tests/test_checks_integration.py` runs in CI's compose job against the stack's own runs page, with the window cut to 20 seconds and PageSpeed pointed at a port where nothing listens, so the fallback records an error as its finding without calling Google. Real Lighthouse runs in the checks container. From CI run 459c206:
+
+```
+self hosted lighthouse check f5e9bc68-93a6-4be0-a9cc-d145a4703702: {"lcp_ms": 2275, "scores": {"seo": 0.82, "performance": 0.97, "accessibility": 1, "best-practices": 0.78, "agentic-browsing": 0.5}, "tbt_ms": 0, "final_url": "http://proxy:8000/", ...}
+self hosted broken_links check d0c0a33a-4aac-41c4-8e71-7edac46dbb50: {"broken": [], "broken_count": 0, "pages_checked": 1, "robots_skipped": 0, "page_limit_reached": false}
+cloud fallback took check f6e6ab0a-4925-4001-ada3-094b9de1b7d8 after 21.0s: {"error": "<urlopen error [Errno 111] Connection refused>"}
+tests/test_checks_integration.py::test_a_lighthouse_check_runs_on_the_self_hosted_worker PASSED
+tests/test_checks_integration.py::test_a_broken_links_check_runs_on_the_self_hosted_worker PASSED
+tests/test_checks_integration.py::test_a_lighthouse_check_falls_back_to_the_cloud_when_the_worker_is_offline PASSED
+tests/test_checks_integration.py::test_a_broken_links_check_never_falls_back PASSED
+================= 6 passed, 234 deselected in 74.12s (0:01:14) =================
+```
+
+The six include the two replica tests. The weekly schedule:
+
+```
+tests/test_scheduler.py::test_schedule_weekly_checks_creates_a_lighthouse_and_a_crawl_per_page PASSED
+tests/test_scheduler.py::test_schedule_weekly_checks_creates_nothing_inside_the_week PASSED
+tests/test_scheduler.py::test_schedule_weekly_checks_creates_the_next_once_the_week_is_up PASSED
+tests/test_scheduler.py::test_schedule_weekly_checks_is_due_per_kind PASSED
+tests/test_scheduler.py::test_schedule_weekly_checks_logs_and_carries_on_when_the_api_refuses PASSED
 ```
 
 ## Observability
