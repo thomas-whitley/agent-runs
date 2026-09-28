@@ -69,6 +69,9 @@ class Settings:
     embedding_model: str
     check_claim_window_seconds: float = DEFAULT_CHECK_CLAIM_WINDOW_SECONDS
     pagespeed_api_key: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_webhook_secret: str | None = None
+    telegram_api_url: str = "https://api.telegram.org"
 
 
 def _default_worker_id() -> str:
@@ -97,4 +100,7 @@ def load_settings() -> Settings:
             os.environ.get("CHECK_CLAIM_WINDOW", DEFAULT_CHECK_CLAIM_WINDOW_SECONDS)
         ),
         pagespeed_api_key=os.environ.get("PAGESPEED_API_KEY") or None,
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
+        telegram_webhook_secret=os.environ.get("TELEGRAM_WEBHOOK_SECRET") or None,
+        telegram_api_url=os.environ.get("TELEGRAM_API_URL") or "https://api.telegram.org",
     )

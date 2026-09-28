@@ -53,3 +53,18 @@ def test_load_mercury_config_defaults_to_no_pages(tmp_path):
     config_file.write_text(yaml.dump({"portfolio": {"sites": ["https://a.example"]}}))
 
     assert load_mercury_config(config_file).pages == ()
+
+
+def test_load_mercury_config_reads_the_telegram_chat_id(tmp_path):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(yaml.dump({"telegram": {"chat_id": 123456789}}))
+
+    assert load_mercury_config(config_file).telegram_chat_id == 123456789
+
+
+@pytest.mark.parametrize("telegram", [{"chat_id": 0}, {}, None])
+def test_a_zero_or_missing_chat_id_allows_no_chat(tmp_path, telegram):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(yaml.dump({"telegram": telegram}))
+
+    assert load_mercury_config(config_file).telegram_chat_id is None

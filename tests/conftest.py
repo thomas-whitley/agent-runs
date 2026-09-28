@@ -141,3 +141,12 @@ def migrated_db(clean_db: str):
     apply_migrations(clean_db)
     with psycopg.connect(clean_db, autocommit=True) as conn:
         yield conn
+
+
+@pytest.fixture
+def fake_telegram():
+    from tests.telegram_fake import FakeTelegram
+
+    server = FakeTelegram()
+    yield server
+    server.close()

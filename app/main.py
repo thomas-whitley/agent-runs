@@ -13,10 +13,12 @@ from app.auth import require_bearer_token
 from app.check_claims import router as check_claims_router
 from app.config import load_settings
 from app.logging_setup import configure_logging
+from app.mercury_config import MercuryConfig, load_mercury_config
 from app.migrations import apply_migrations
 from app.run_list import DEFAULT_LIMIT, MAX_LIMIT, build_query, encode_cursor, serialize_run_row
 from app.stream import event_stream, parse_last_event_id
 from app.tasks import CHECK_KINDS, DEFAULT_CHECK_KIND, TASK_TYPES
+from app.telegram_webhook import router as telegram_router
 from app.telemetry import configure_telemetry, start_run_trace
 
 # web/ is built into web/dist, next to app/ both in the image and in a checkout.
@@ -81,6 +83,12 @@ async def lifespan(app: FastAPI):
 
     app.state.settings = settings
     app.state.pool = pool
+    # The webhook reads the chat allowlist and the site list from here. With
+    # no file mounted the allowlist is empty and the bot answers no one.
+    try:
+        app.state.mercury = load_mercury_config(settings.mercury_config_path)
+    except FileNotFoundError:
+        app.state.mercury = MercuryConfig(sites=())
     try:
         yield
     finally:
@@ -124,6 +132,7 @@ def create_app() -> FastAPI:
         return RunCreated(id=row[0], status=row[1])
 
     app.include_router(check_claims_router)
+    app.include_router(telegram_router)
 
     @app.get("/runs")
     async def list_runs(
