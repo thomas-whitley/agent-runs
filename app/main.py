@@ -2,12 +2,11 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from psycopg_pool import AsyncConnectionPool
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel
 
 from app.auth import require_bearer_token
 from app.check_claims import router as check_claims_router
@@ -16,8 +15,9 @@ from app.logging_setup import configure_logging
 from app.mercury_config import MercuryConfig, load_mercury_config
 from app.migrations import apply_migrations
 from app.run_list import DEFAULT_LIMIT, MAX_LIMIT, build_query, encode_cursor, serialize_run_row
+from app.run_request import RunRequest
 from app.stream import event_stream, parse_last_event_id
-from app.tasks import CHECK_KINDS, DEFAULT_CHECK_KIND, TASK_TYPES
+from app.tasks import TASK_TYPES
 from app.telegram_webhook import router as telegram_router
 from app.telemetry import configure_telemetry, start_run_trace
 
@@ -27,45 +27,6 @@ DEFAULT_WEB_DIST_DIR = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 def _web_dist_dir() -> Path:
     return Path(os.environ.get("WEB_DIST_DIR", DEFAULT_WEB_DIST_DIR)).resolve()
-
-
-class RunRequest(BaseModel):
-    type: str
-    inputs: dict[str, Any]
-
-    @field_validator("type")
-    @classmethod
-    def type_must_be_registered(cls, value: str) -> str:
-        if value not in TASK_TYPES:
-            raise ValueError(f"unknown task type {value!r}")
-        return value
-
-    @field_validator("inputs")
-    @classmethod
-    def inputs_must_carry_a_task(cls, value: dict[str, Any]) -> dict[str, Any]:
-        # Every registered type stores its input on the same task column for
-        # now; per type input shapes are future work, not this step's.
-        task = value.get("task")
-        if not isinstance(task, str) or not task.strip():
-            raise ValueError("inputs.task must not be blank")
-        return value
-
-    @model_validator(mode="after")
-    def only_a_check_has_a_kind(self) -> "RunRequest":
-        kind = self.inputs.get("kind")
-        if kind is None:
-            return self
-        if self.type != "site_check":
-            raise ValueError("inputs.kind is only for site_check")
-        if kind not in CHECK_KINDS:
-            raise ValueError(f"unknown check kind {kind!r}")
-        return self
-
-    @property
-    def check_kind(self) -> str | None:
-        if self.type != "site_check":
-            return None
-        return self.inputs.get("kind", DEFAULT_CHECK_KIND)
 
 
 class RunCreated(BaseModel):

@@ -3,7 +3,8 @@
 Telegram's secret token header is checked first and fails closed when no
 secret is configured. Then the chat id is checked against the allowlist of
 one; any other sender gets a 200 and no reply at all. /status, /runs and
-/cancel are answered here with no model call.
+/cancel are answered here with no model call. Anything else becomes a chat
+run for the worker (app/chat.py).
 
 Every update the check lets through is answered with 200, even when the
 reply fails to send, because Telegram retries anything else and a retried
@@ -19,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 from psycopg.types.json import Jsonb
 from starlette.concurrency import run_in_threadpool
 
+from app.tasks import TASK_TYPES
 from app.telegram import TelegramClient, TelegramError
 
 logger = logging.getLogger("agent_runs.telegram")
@@ -98,9 +100,26 @@ async def telegram_webhook(request: Request) -> dict:
         logger.info("ignored an update from a chat not on the allowlist")
         return {}
 
-    reply = await _answer(request, text.strip())
-    if reply is not None:
-        await _send(request, chat_id, reply)
+    text = text.strip()
+    if text.startswith("/"):
+        reply = await _answer(request, text)
+        if reply is not None:
+            await _send(request, chat_id, reply)
+        return {}
+
+    # Free text is the worker's, which holds the model key. One placeholder
+    # message now, which the worker edits with its answer, so a cold worker
+    # does not leave the chat silent.
+    message_id = await _send(request, chat_id, "On it.")
+    async with request.app.state.pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                "INSERT INTO runs (task, type, provider, telegram_chat_id, telegram_message_id) "
+                "VALUES (%s, 'chat', %s, %s, %s) RETURNING id",
+                (text, TASK_TYPES["chat"].provider, chat_id, message_id),
+            )
+        ).fetchone()
+    logger.info("chat run %s created from Telegram", row[0], extra={"run_id": str(row[0])})
     return {}
 
 
@@ -118,16 +137,18 @@ async def _answer(request: Request, text: str) -> str | None:
     return None
 
 
-async def _send(request: Request, chat_id: int, text: str) -> None:
+async def _send(request: Request, chat_id: int, text: str) -> int | None:
+    """Send a message and return its id, or None when it could not be sent."""
     settings = request.app.state.settings
     if not settings.telegram_bot_token:
         logger.error("no TELEGRAM_BOT_TOKEN, so the reply was not sent")
-        return
+        return None
     client = TelegramClient(settings.telegram_bot_token, settings.telegram_api_url)
     try:
-        await run_in_threadpool(client.send_message, chat_id, text)
+        return await run_in_threadpool(client.send_message, chat_id, text)
     except TelegramError as error:
         logger.error("reply not sent: %s", error)
+        return None
 
 
 def _duration(seconds) -> str:

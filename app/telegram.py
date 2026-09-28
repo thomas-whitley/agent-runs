@@ -7,6 +7,10 @@ exception or a log line. Errors carry Telegram's own description only.
 import json
 import urllib.error
 import urllib.request
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.config import Settings
 
 DEFAULT_API_URL = "https://api.telegram.org"
 TIMEOUT_SECONDS = 10.0
@@ -63,3 +67,10 @@ def _json_or_empty(raw: bytes) -> dict:
         return json.loads(raw)
     except ValueError:
         return {}
+
+
+def telegram_client(settings: "Settings") -> TelegramClient | None:
+    """The configured client, or None when no bot token is set."""
+    if not settings.telegram_bot_token:
+        return None
+    return TelegramClient(settings.telegram_bot_token, settings.telegram_api_url)

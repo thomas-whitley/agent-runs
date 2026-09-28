@@ -136,9 +136,9 @@ def test_the_daily_limit_refuses_the_run_and_closes_its_stream(migrated_db):
 
 
 def test_process_run_refuses_a_type_with_no_executor_yet(migrated_db):
-    """chat has no loop of its own until step 3. Its stream must still end."""
+    """repo_chore has no executor until step 4. Its stream must still end."""
     run_id = migrated_db.execute(
-        "INSERT INTO runs (task, type) VALUES (%s, %s) RETURNING id", (PASSING_TEST, "chat")
+        "INSERT INTO runs (task, type) VALUES (%s, %s) RETURNING id", (PASSING_TEST, "repo_chore")
     ).fetchone()[0]
     claim_next_run(migrated_db, "worker-test")
 
@@ -481,3 +481,23 @@ def test_a_check_taken_back_during_the_call_is_not_written(migrated_db):
     ).fetchone()[0]
     assert finished is None
     assert check_events(migrated_db, check) == []
+
+
+def test_process_run_answers_a_chat_run_through_telegram(migrated_db, fake_telegram):
+    run_id = migrated_db.execute(
+        "INSERT INTO runs (task, type, provider, telegram_chat_id, telegram_message_id) "
+        "VALUES ('check my site', 'chat', 'gemini', 42, 7) RETURNING id"
+    ).fetchone()[0]
+    claim_next_run(migrated_db, "worker-test")
+    settings = settings_with(
+        worker_id="worker-test", telegram_bot_token="123:abc", telegram_api_url=fake_telegram.url
+    )
+    reply = '{"action": "ask", "question": "Which URL?"}'
+
+    process_run(migrated_db, run_id, settings, model_builder=stub_model_builder(reply))
+
+    status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
+    assert status == "succeeded"
+    assert fake_telegram.sent("editMessageText") == [
+        {"chat_id": 42, "message_id": 7, "text": "Which URL?"}
+    ]

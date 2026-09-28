@@ -9,6 +9,7 @@ from typing import Any
 import psycopg
 from opentelemetry import trace
 
+from app.chat import run_chat
 from app.config import (
     DEFAULT_CHECK_CLAIM_WINDOW_SECONDS,
     DEFAULT_LEASE_SECONDS,
@@ -25,14 +26,16 @@ from app.pagespeed import run_pagespeed
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, finish_run, heartbeat, record_step
 from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES
+from app.telegram import telegram_client
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
 
-# pytest is the only loop type with an executor so far, and a site_check the
-# worker takes over runs on PageSpeed in run_cloud_check. Every other
+# pytest runs the agent loop and chat turns a Telegram message into a task
+# (app/chat.py). A site_check the worker takes over runs on PageSpeed in
+# run_cloud_check. Every other
 # registered type is refused, closing its stream, until its own step lands.
-_RUNNABLE_TYPES = {"pytest"}
+_RUNNABLE_TYPES = {"pytest", "chat"}
 
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
 # lease. The second case is a worker that was killed outright.
@@ -234,6 +237,11 @@ def process_run(
         )
         refuse_run(conn, run_id, str(error))
         return None
+
+    if task_type_name == "chat":
+        telegram = telegram_client(settings)
+        tokens = run_chat(conn, run_id, model, telegram, worker_id=settings.worker_id)
+        return LoopResult(status="succeeded", attempts=1, tokens_used=tokens)
 
     return run_agent_loop(
         conn,
