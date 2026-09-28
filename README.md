@@ -26,7 +26,7 @@ uv run pytest
 
 ## The page at `/`
 
-The API serves a built page from `web/dist` at `/`. It is registered after every API route, so `/health`, `/runs`, `/runs/{id}/events` and `/checks/*` never reach it, and any other GET gets the page. `tests/test_web_page.py` asserts both sides of that. For now the page shows only its title. The static demo page and its kill connection button are gone, so the way to watch a resume by hand is the `curl` walkthrough under the resume section below.
+The API serves a built page from `web/dist` at `/`. It is registered after every API route, so `/health`, `/runs`, `/runs/{id}/events` and `/checks/*` never reach it, and any other GET gets the page. `tests/test_web_page.py` asserts both sides of that. It is a Vite, React and TypeScript app in `web/` that lists every run newest first, 50 at a time, with its type, provider, executor, status, tokens and duration, and an Older runs button that follows the endpoint's keyset cursor, which `web/test/runs-list.test.tsx` tests at the page boundary. The static demo page and its kill connection button are gone, so the way to watch a resume by hand is the `curl` walkthrough under the resume section below.
 
 ## Claims and their proof
 

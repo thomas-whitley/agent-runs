@@ -1,4 +1,4 @@
-# Handoff: Mercury steps 2a to 2c done, deploys moved to the private repo, ready for 2d (2026-09-24, ~11:30 Melbourne)
+# Handoff: runs page (6a, 6b) live, next is the rest of 2d (2026-09-28, ~22:00 Melbourne)
 
 ## Where things stand
 
@@ -33,6 +33,42 @@ Suggested 2d order, one commit each, test first: the claim window on the Python
 side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links`
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
+
+## Steps 6a and 6b are live (2026-09-28)
+
+The runs page is live at
+`https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io/`,
+revision `agent-runs-api--0000032`, from the image
+`ghcr.io/thomas-whitley/agent-runs:54885ff99db3c850584ecef4d9caaaf8987bcb69`.
+`PUBLIC_SHA` in `mercury-config` is `54885ff` (its commit `70c0fbb`, Deploy run
+36417745019 green). That bump from `b501861` also took 2d's claim window and the
+PageSpeed fallback live. `PAGESPEED_API_KEY` is not set in the private repo, and the
+Bicep leaves the secret out when it is empty, so the fallback calls PageSpeed with
+no key.
+
+- **6a.** `web/` is Vite, React and TypeScript on Node 22, npm pinned with
+  `packageManager` and run through corepack on this machine. The Dockerfile builds it
+  in a Node stage and copies `web/dist` next to `app`. FastAPI serves it from a catch
+  all GET registered after every API route (`tests/test_web_page.py`), and
+  `index.html` goes out with `Cache-Control: no-cache` so a redeploy never leaves a
+  browser asking for deleted asset hashes. `WEB_DIST_DIR` overrides where it looks.
+  `ci.yml` and `deploy.yml` both have a `web` job, and Publish waits for it.
+  `static/` and the task 7 demo page are gone, so there is no kill connection button
+  until 6c.
+- **6b.** The page reads `GET /runs` 50 at a time and shows short id, created time
+  (in the browser's time zone), type, provider, executor, status, tokens and
+  duration. Older runs follows `next_cursor` and appears only when there is one. A
+  null provider or executor shows as `none`; the server writes `cloud` itself for a
+  check the cloud ran. `web/test/runs-list.test.tsx` has 8 tests, covering the page
+  boundary against a fake of the endpoint's contract.
+- **What the live list shows.** On 28 September it was almost all the hourly
+  uptime `site_check` runs, succeeded in 56 to 205 ms with 0 tokens. That is the
+  real data and was left alone. Before recording, one public `pytest` run and one
+  Lighthouse check claimed by the laptop worker give it some variety.
+- The README section on the page now says what it shows. Claim six is unchanged
+  until 6c.
+- Deferred: a failed Older runs load shows the error with no retry until reload,
+  and the Python page tests use a stand in `dist`.
 
 ## The order changed on 2026-09-28: 6a and 6b before the rest of 2d
 

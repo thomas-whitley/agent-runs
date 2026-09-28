@@ -21,7 +21,7 @@ permissions:
 env:
   # Bumped by hand, never a branch or latest. A full commit SHA from the public
   # repo whose Publish workflow has pushed the matching image tag.
-  PUBLIC_SHA: b50186152fa7b234020e5919088ad877df04a4fe
+  PUBLIC_SHA: 54885ff99db3c850584ecef4d9caaaf8987bcb69
   PUBLIC_REPO: thomas-whitley/agent-runs
   RESOURCE_GROUP: agent-runs
 
