@@ -4,10 +4,11 @@
 import * as chromeLauncher from "chrome-launcher";
 import lighthouse from "lighthouse";
 
+import { chromeFlags } from "./chrome-flags.js";
 import type { LighthouseResult } from "./summary.js";
 
 export async function runLighthouse(url: string): Promise<LighthouseResult> {
-  const chrome = await chromeLauncher.launch({ chromeFlags: ["--headless=new"] });
+  const chrome = await chromeLauncher.launch({ chromeFlags: chromeFlags() });
   try {
     const run = await lighthouse(url, { port: chrome.port, output: "json", logLevel: "error" });
     if (run === undefined) {

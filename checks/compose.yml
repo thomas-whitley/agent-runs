@@ -1,0 +1,16 @@
+# The self hosted checks worker, on the machine that runs Lighthouse and the
+# broken link crawl. Put API_BASE_URL and MERCURY_BEARER_TOKEN in a .env
+# beside this file (gitignored), then:
+#
+#   docker compose -f checks/compose.yml up -d --build
+#
+# On Windows or macOS set Docker Desktop to start on login, or after a reboot
+# nothing restarts this and every Lighthouse check takes the cloud fallback.
+services:
+  checks:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WORKER_ID: ${WORKER_ID:-self-hosted}
+      POLL_SECONDS: ${POLL_SECONDS:-60}

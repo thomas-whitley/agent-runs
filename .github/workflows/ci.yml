@@ -102,11 +102,23 @@ jobs:
 
   compose:
     runs-on: ubuntu-latest
+    env:
+      # A short window so the fallback test takes seconds, and a PageSpeed
+      # endpoint where nothing listens, so it never calls Google.
+      CHECK_CLAIM_WINDOW: "20"
+      PAGESPEED_URL: http://127.0.0.1:9/runPagespeed
     steps:
       - uses: actions/checkout@v5
 
+      # A throwaway token for this job's stack only, never stored anywhere.
+      - name: Make a bearer token for the stack
+        run: echo "MERCURY_BEARER_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
       - name: Build and start the stack
         run: docker compose up --build --detach --wait
+
+      - name: Build the checks worker image
+        run: docker compose --profile checks build checks
 
       - name: Health endpoint answers through the published port
         run: |
@@ -121,11 +133,11 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Two replicas serve one run
+      - name: Two replicas, and checks on the self hosted worker and the cloud fallback
         env:
           AGENT_RUNS_BASE_URL: http://localhost:8000
           AGENT_RUNS_DATABASE_URL: postgresql://agent:agent@localhost:5432/agent_runs
-        run: uv run pytest -m integration -o addopts= -v
+        run: uv run pytest -m integration -o addopts= -v -s
 
       - name: Show the stack's logs on failure
         if: failure()

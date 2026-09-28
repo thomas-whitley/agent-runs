@@ -145,3 +145,14 @@ def test_an_http_error_from_pagespeed_reports_its_message(monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_pagespeed_url_overrides_the_endpoint(monkeypatch):
+    """So the compose stack in CI can exercise the fallback without calling Google."""
+    monkeypatch.setenv("PAGESPEED_URL", "http://127.0.0.1:9/runPagespeed")
+    opener = FakeOpener({"lighthouseResult": LIGHTHOUSE_RESULT})
+
+    run_pagespeed("https://example.com/", None, opener=opener)
+
+    request, _ = opener.requests[0]
+    assert request.full_url.startswith("http://127.0.0.1:9/runPagespeed?")

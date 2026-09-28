@@ -21,7 +21,8 @@ env:
 
 jobs:
   # The two replica proof runs against compose on every deploy, because it is
-  # free here and costs an Azure replica otherwise.
+  # free here and costs an Azure replica otherwise. The checks integration
+  # tests skip here with no bearer token set; CI's compose job runs them.
   verify:
     runs-on: ubuntu-latest
     steps:

@@ -12,12 +12,15 @@ fallback needs PAGESPEED_API_KEY.
 """
 
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+# PAGESPEED_URL in the environment replaces it, which only the compose stack
+# in CI does, so its fallback test never calls Google.
 PAGESPEED_URL = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 CATEGORIES = ("performance", "accessibility", "best-practices", "seo")
 
@@ -86,7 +89,8 @@ def run_pagespeed(
         [("url", url), ("strategy", "mobile"), *(("category", name) for name in CATEGORIES)]
     )
     headers = {"X-Goog-Api-Key": api_key} if api_key else {}
-    request = urllib.request.Request(f"{PAGESPEED_URL}?{query}", headers=headers)
+    endpoint = os.environ.get("PAGESPEED_URL") or PAGESPEED_URL
+    request = urllib.request.Request(f"{endpoint}?{query}", headers=headers)
     body = json.loads(opener(request, timeout_seconds))
     if "lighthouseResult" not in body:
         message = body.get("error", {}).get("message", "no lighthouseResult in the response")

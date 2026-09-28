@@ -64,6 +64,11 @@ services:
       MAX_RUNS_PER_DAY: ${MAX_RUNS_PER_DAY:-20}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       POLL_SECONDS: "0.5"
+      # CI shortens the window and points PageSpeed at nothing, so the
+      # fallback test takes seconds and never calls Google.
+      CHECK_CLAIM_WINDOW: ${CHECK_CLAIM_WINDOW:-1800}
+      PAGESPEED_URL: ${PAGESPEED_URL:-}
+      PAGESPEED_API_KEY: ${PAGESPEED_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -85,5 +90,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      proxy:
+        condition: service_healthy
+
+  # The self hosted checks worker, from checks/Dockerfile, pointed at the
+  # proxy. Behind a profile: the integration test runs it once per check
+  # with `docker compose --profile checks run --rm checks node dist/main.js
+  # --once`, and a check it never runs is how the test takes it offline.
+  checks:
+    build: ./checks
+    profiles: ["checks"]
+    environment:
+      API_BASE_URL: http://proxy:8000
+      MERCURY_BEARER_TOKEN: ${MERCURY_BEARER_TOKEN:-}
+      WORKER_ID: compose-checks
+    depends_on:
       proxy:
         condition: service_healthy
