@@ -9,6 +9,7 @@ from typing import Any
 import psycopg
 from opentelemetry import trace
 
+from app.budget import BudgetTrip, check_budget
 from app.chat import run_chat
 from app.config import (
     DEFAULT_CHECK_CLAIM_WINDOW_SECONDS,
@@ -20,6 +21,7 @@ from app.config import (
 from app.corpus import load_corpus
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
+from app.mercury_config import load_mercury_config
 from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.pagespeed import run_pagespeed
@@ -27,7 +29,7 @@ from app.progress import push_progress
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, finish_run, heartbeat, record_step
 from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES
-from app.telegram import TelegramClient, telegram_client
+from app.telegram import TelegramClient, TelegramError, telegram_client
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.worker")
@@ -190,6 +192,7 @@ def process_run(
     tracer: trace.Tracer | None = None,
     model_builder: Callable[[Settings, str], Model] = build_model,
     check_runner: Callable[[str, str | None], dict[str, Any]] = run_pagespeed,
+    owner_chat_id: int | None = None,
 ) -> LoopResult | None:
     """Execute one claimed run. None means it was refused rather than run.
 
@@ -201,7 +204,7 @@ def process_run(
     task_type_name = _run_type(conn, run_id)
     telegram = telegram_client(settings)
     try:
-        return _process_run(
+        result = _process_run(
             conn,
             run_id,
             task_type_name,
@@ -211,7 +214,16 @@ def process_run(
             model_builder,
             check_runner,
             telegram,
+            owner_chat_id,
         )
+        if result is not None and result.status == "budget_exhausted":
+            _tell_owner(
+                telegram,
+                owner_chat_id,
+                f"Budget: run {run_id[:8]} stopped at its own budget of "
+                f"{settings.token_budget:,} tokens.",
+            )
+        return result
     finally:
         # The last word on a run started from Telegram, whichever way it ended.
         # A chat run edits its own message instead.
@@ -229,6 +241,7 @@ def _process_run(
     model_builder: Callable[[Settings, str], Model],
     check_runner: Callable[[str, str | None], dict[str, Any]],
     telegram: TelegramClient | None,
+    owner_chat_id: int | None,
 ) -> LoopResult | None:
     # A check makes no model call, so the daily limit that protects the key
     # does not apply to it.
@@ -258,6 +271,14 @@ def _process_run(
         return None
 
     task_type = TASK_TYPES[task_type_name]
+    trip = check_budget(
+        conn, task_type.provider, settings.daily_tokens_per_provider, settings.monthly_budget_usd
+    )
+    if trip is not None:
+        end_on_budget(conn, run_id, trip)
+        _tell_owner(telegram, owner_chat_id, f"Budget: run {run_id[:8]} stopped. {trip.message}")
+        return None
+
     try:
         model = model_builder(settings, task_type.provider)
     except RuntimeError as error:
@@ -288,6 +309,26 @@ def _process_run(
     )
 
 
+def end_on_budget(conn: psycopg.Connection, run_id: str, trip: BudgetTrip) -> None:
+    """Close a run a cap stopped, with one done event that names the cap."""
+    logger.warning("run %s stopped by the %s cap", run_id, trip.cap, extra={"run_id": run_id})
+    output = {"status": "budget", "cap": trip.cap, "reason": trip.message}
+    next_seq = conn.execute(
+        "SELECT coalesce(max(seq), 0) + 1 FROM events WHERE run_id = %s", (run_id,)
+    ).fetchone()[0]
+    record_step(conn, run_id, next_seq, "done", output=output)
+    conn.execute("UPDATE runs SET status = 'budget', finished_at = now() WHERE id = %s", (run_id,))
+
+
+def _tell_owner(telegram: TelegramClient | None, chat_id: int | None, text: str) -> None:
+    if telegram is None or chat_id is None:
+        return
+    try:
+        telegram.send_message(chat_id, text)
+    except TelegramError as error:
+        logger.error("budget message not sent: %s", error)
+
+
 def _step_landed(
     conn: psycopg.Connection, run_id: str, worker_id: str, telegram: TelegramClient | None
 ) -> bool:
@@ -307,6 +348,11 @@ def main() -> None:  # pragma: no cover - the process entry point
     configure_telemetry()
     retriever = build_retriever(settings)
     models: dict[str, Model] = {}
+    # The owner's chat, told when a cap stops a run. No config, no message.
+    try:
+        owner_chat_id = load_mercury_config(settings.mercury_config_path).telegram_chat_id
+    except FileNotFoundError:
+        owner_chat_id = None
 
     def cached_model_builder(settings: Settings, provider_name: str) -> Model:
         """One client per provider, built the first time a run needs it."""
@@ -342,7 +388,14 @@ def main() -> None:  # pragma: no cover - the process entry point
                     run_id,
                     extra={"run_id": run_id, "worker_id": settings.worker_id},
                 )
-                process_run(conn, run_id, settings, retriever, model_builder=cached_model_builder)
+                process_run(
+                    conn,
+                    run_id,
+                    settings,
+                    retriever,
+                    model_builder=cached_model_builder,
+                    owner_chat_id=owner_chat_id,
+                )
             except Exception:
                 # run_agent_loop already closes a run it could not finish. This
                 # catches everything outside it, so the worker outlives a blip.

@@ -28,6 +28,9 @@ class ProviderConfig:
     base_url: str | None
     api_key_env: str
     model: str
+    # What the monthly cap charges per million tokens. Runs store total
+    # tokens only, so this is one rate for input and output alike.
+    usd_per_million_tokens: float = 0.0
 
 
 # Chosen per task type by the registry in app/tasks.py, not by MODEL. Both
@@ -39,12 +42,17 @@ PROVIDERS: dict[str, ProviderConfig] = {
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key_env="MODEL_API_KEY",
         model="gemini-3.5-flash-lite",
+        # The free tier.
+        usd_per_million_tokens=0.0,
     ),
     "haiku": ProviderConfig(
         kind="anthropic",
         base_url=None,
         api_key_env="ANTHROPIC_API_KEY",
         model="claude-haiku-4-5-20251001",
+        # Haiku 4.5's output price, charged on every token, so the monthly
+        # figure can only overstate the bill.
+        usd_per_million_tokens=5.0,
     ),
 }
 
@@ -72,6 +80,8 @@ class Settings:
     telegram_bot_token: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_api_url: str = "https://api.telegram.org"
+    daily_tokens_per_provider: int = 500_000
+    monthly_budget_usd: float = 5.0
 
 
 def _default_worker_id() -> str:
@@ -103,4 +113,6 @@ def load_settings() -> Settings:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
         telegram_webhook_secret=os.environ.get("TELEGRAM_WEBHOOK_SECRET") or None,
         telegram_api_url=os.environ.get("TELEGRAM_API_URL") or "https://api.telegram.org",
+        daily_tokens_per_provider=int(os.environ.get("DAILY_TOKENS_PER_PROVIDER", "500000")),
+        monthly_budget_usd=float(os.environ.get("MONTHLY_BUDGET_USD", "5")),
     )
