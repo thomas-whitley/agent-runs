@@ -181,3 +181,28 @@ def test_a_failed_reply_still_answers_telegram_with_200(bot, fake_telegram, migr
     response = post(bot, update("/runs"))
 
     assert response.status_code == 200
+
+
+def test_each_answer_logs_how_long_after_the_message_was_sent(
+    bot, fake_telegram, migrated_db, caplog
+):
+    """The cold start figure in the README is read off this line on the live
+    deploy: Telegram stamps each message with the second it was sent, so the
+    first message after idle shows the whole wait."""
+    import logging
+    import re
+    import time
+
+    body = update("/runs")
+    body["message"]["date"] = int(time.time()) - 3
+    telegram_logger = logging.getLogger("agent_runs.telegram")
+    telegram_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("INFO", logger="agent_runs.telegram"):
+            post(bot, body)
+    finally:
+        telegram_logger.removeHandler(caplog.handler)
+
+    match = re.search(r"answered /runs (\d+\.\d) s after it was sent", caplog.text)
+    assert match, caplog.text
+    assert 3.0 <= float(match.group(1)) < 10.0

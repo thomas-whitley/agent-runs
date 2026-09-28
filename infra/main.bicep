@@ -38,10 +38,18 @@ param mercuryBearerToken string = ''
 @secure()
 param pagespeedApiKey string = ''
 
+@description('Telegram bot token. The api replies with it and the worker edits progress and sends budget messages. Empty leaves the bot silent.')
+@secure()
+param telegramBotToken string = ''
+
+@description('The secret Telegram sends in X-Telegram-Bot-Api-Secret-Token. Empty refuses every webhook call.')
+@secure()
+param telegramWebhookSecret string = ''
+
 @description('Seconds a Lighthouse check waits for the self hosted worker before the cloud worker takes it.')
 param checkClaimWindowSeconds int = 1800
 
-@description('mercury.yaml, base64 encoded, for the scheduler. The private config repo, which runs this template, passes its real one.')
+@description('mercury.yaml, base64 encoded, for the scheduler, the api (the Telegram chat allowlist and site list) and the worker (the chat told about budget trips). The private config repo, which runs this template, passes its real one.')
 @secure()
 param mercuryConfigB64 string = ''
 
@@ -50,7 +58,8 @@ var deployScheduler = !empty(mercuryBearerToken)
 
 // Per docs/mercury.md the real config lives only in the private repo, which is
 // the only thing that deploys this template. A deploy by hand without the
-// config gets a placeholder, and the Job then checks no sites.
+// config gets a placeholder, so the Job checks no sites and the bot, with no
+// chat on its allowlist, answers no one.
 var schedulerConfigB64 = empty(mercuryConfigB64)
   ? base64('portfolio:\n  sites: []\n')
   : mercuryConfigB64
@@ -140,9 +149,72 @@ var coreSecrets = [
 
 var sharedSecrets = concat(coreSecrets, optionalSecrets)
 
+// The config goes to every role; each reads only its own part of it.
+var configSecret = [
+  {
+    name: 'mercury-config'
+    value: schedulerConfigB64
+  }
+]
+
+var configEnvironment = [
+  {
+    name: 'MERCURY_CONFIG_B64'
+    secretRef: 'mercury-config'
+  }
+]
+
+var telegramTokenSecret = empty(telegramBotToken)
+  ? []
+  : [
+      {
+        name: 'telegram-bot-token'
+        value: telegramBotToken
+      }
+    ]
+
+var telegramTokenEnvironment = empty(telegramBotToken)
+  ? []
+  : [
+      {
+        name: 'TELEGRAM_BOT_TOKEN'
+        secretRef: 'telegram-bot-token'
+      }
+    ]
+
+// Only the api receives webhook calls, so only it holds the secret.
+var apiSecrets = concat(
+  sharedSecrets,
+  configSecret,
+  telegramTokenSecret,
+  empty(telegramWebhookSecret)
+    ? []
+    : [
+        {
+          name: 'telegram-webhook-secret'
+          value: telegramWebhookSecret
+        }
+      ]
+)
+
+var apiTelegramEnvironment = concat(
+  configEnvironment,
+  telegramTokenEnvironment,
+  empty(telegramWebhookSecret)
+    ? []
+    : [
+        {
+          name: 'TELEGRAM_WEBHOOK_SECRET'
+          secretRef: 'telegram-webhook-secret'
+        }
+      ]
+)
+
 // The worker alone calls PageSpeed, so the key goes to it alone.
 var workerSecrets = concat(
   sharedSecrets,
+  configSecret,
+  telegramTokenSecret,
   empty(pagespeedApiKey)
     ? []
     : [
@@ -182,17 +254,13 @@ var leaseSeconds = 120
 // app/worker.py.
 var pendingWorkQuery = 'SELECT count(*) FROM runs WHERE finished_at IS NULL AND (type <> \'site_check\' OR (type = \'site_check\' AND check_kind = \'lighthouse\' AND (executor = \'cloud\' OR (claimed_by IS NULL AND created_at < now() - make_interval(secs => ${checkClaimWindowSeconds})) OR (status = \'running\' AND heartbeat_at < now() - make_interval(secs => ${leaseSeconds + checkClaimWindowSeconds})))))'
 
-// The scheduler makes no model call, so it gets no model or embedding key,
-// and the config goes to it alone. Only used when deployScheduler is true, so
-// the token cannot be empty here.
-var schedulerSecrets = concat(coreSecrets, [
+// The scheduler makes no model call, so it gets no model, embedding or bot
+// key. Only used when deployScheduler is true, so the token cannot be empty
+// here.
+var schedulerSecrets = concat(coreSecrets, configSecret, [
   {
     name: 'mercury-bearer-token'
     value: mercuryBearerToken
-  }
-  {
-    name: 'mercury-config'
-    value: schedulerConfigB64
   }
 ])
 
@@ -251,7 +319,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         // it would for a request and response service.
         allowInsecure: false
       }
-      secrets: sharedSecrets
+      secrets: apiSecrets
     }
     template: {
       containers: [
@@ -279,7 +347,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'OTEL_SERVICE_NAME'
               value: '${name}-api'
             }
-          ])
+          ], apiTelegramEnvironment)
         }
       ]
       scale: {
@@ -327,7 +395,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'OTEL_SERVICE_NAME'
               value: '${name}-worker'
             }
-          ], modelEnvironment, workerCheckEnvironment)
+          ], modelEnvironment, workerCheckEnvironment, configEnvironment, telegramTokenEnvironment)
         }
       ]
       scale: {

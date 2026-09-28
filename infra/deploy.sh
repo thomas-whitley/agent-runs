@@ -26,6 +26,8 @@ az deployment group create \
       modelApiKey="${MODEL_API_KEY:-}" \
       voyageApiKey="${VOYAGE_API_KEY:-}" \
       pagespeedApiKey="${PAGESPEED_API_KEY:-}" \
+      telegramBotToken="${TELEGRAM_BOT_TOKEN:-}" \
+      telegramWebhookSecret="${TELEGRAM_WEBHOOK_SECRET:-}" \
       mercuryBearerToken="${MERCURY_BEARER_TOKEN:-}" \
       mercuryConfigB64="${MERCURY_CONFIG_B64:-}" \
   --output none

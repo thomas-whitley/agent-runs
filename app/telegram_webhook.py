@@ -14,6 +14,7 @@ reply fails to send, because Telegram retries anything else and a retried
 import hmac
 import logging
 import re
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -105,12 +106,14 @@ async def telegram_webhook(request: Request) -> dict:
         reply = await _answer(request, text)
         if reply is not None:
             await _send(request, chat_id, reply)
+            _log_wait(message, text.split(" ", 1)[0].split("@", 1)[0].lower())
         return {}
 
     # Free text is the worker's, which holds the model key. One placeholder
     # message now, which the worker edits with its answer, so a cold worker
     # does not leave the chat silent.
     message_id = await _send(request, chat_id, "On it.")
+    _log_wait(message, "free text")
     async with request.app.state.pool.connection() as conn:
         row = await (
             await conn.execute(
@@ -121,6 +124,16 @@ async def telegram_webhook(request: Request) -> dict:
         ).fetchone()
     logger.info("chat run %s created from Telegram", row[0], extra={"run_id": str(row[0])})
     return {}
+
+
+def _log_wait(message: dict, what: str) -> None:
+    """How long after the message was sent it was answered. Telegram stamps
+    each message with the second it left the phone, so on the first message
+    after idle this is the cold start as the sender felt it."""
+    sent = message.get("date")
+    if not isinstance(sent, int):
+        return
+    logger.info("answered %s %.1f s after it was sent", what, time.time() - sent)
 
 
 async def _answer(request: Request, text: str) -> str | None:
