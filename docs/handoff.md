@@ -1,4 +1,4 @@
-# Handoff: runs page (6a, 6b) live, next is the rest of 2d (2026-09-28, ~22:00 Melbourne)
+# Handoff: step 2d done and claim seven green, runs page live, next is step 3 (2026-09-28, ~22:45 Melbourne)
 
 ## Where things stand
 
@@ -33,6 +33,46 @@ Suggested 2d order, one commit each, test first: the claim window on the Python
 side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links`
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
+
+## Step 2d is done (2026-09-28)
+
+README claim seven, "A weekly check runs on a self hosted worker and falls back to
+the cloud path when it is offline", is green. **The next step is 3, the Telegram
+webhook**, then 4, 5, 6c and 6d in the brief's order.
+
+- **The crawl** is `checks/src/crawl.ts`: same origin, breadth first, depth 3, 200
+  pages, 10 second timeout, robots.txt for `mercury-checks` or `*`. It reports 4xx,
+  5xx, timeouts and refused connections (status `"error"`), the first 50 listed and
+  the rest counted. `KINDS` is `lighthouse` and `broken_links`.
+- **The weekly schedule** was not in the brief but claim seven says "weekly". The
+  hourly Job now also posts a `lighthouse` and a `broken_links` check for each URL
+  under `portfolio.pages`, when none of that kind was created for that page in 7
+  days (`schedule_weekly_checks` in `app/scheduler.py`). It reads no cron line; the
+  sample's `lighthouse` cron line is gone. The private `mercury.yaml` lists the live
+  runs page as the one page.
+- **The self hosted deployment** is `checks/Dockerfile` (Node 22, Debian Chromium,
+  `CHROME_EXTRA_FLAGS="--no-sandbox --disable-dev-shm-usage"`) and
+  `checks/compose.yml` with `restart: unless-stopped`. It runs on this Linux laptop
+  as `thomas-laptop`, reading `checks/.env` (mode 600, gitignored), which holds
+  `API_BASE_URL`, `WORKER_ID` and the live bearer token, read from the api's
+  Container Apps secret straight into the file and never printed. **Docker here is
+  socket activated (`docker.service` disabled, `docker.socket` enabled), so after a
+  reboot the worker is not back until something touches Docker.** `sudo systemctl
+  enable docker` fixes that.
+- **The integration test** is `tests/test_checks_integration.py`, in CI's compose
+  job only. That job makes a throwaway bearer token, sets `CHECK_CLAIM_WINDOW=20`
+  and `PAGESPEED_URL` to a port where nothing listens (the override is new in
+  `app/pagespeed.py`), and runs the checks worker with `docker compose --profile
+  checks run --rm checks node dist/main.js --once`. It skips in Deploy's verify job,
+  which has no token.
+- **Live proof.** `PUBLIC_SHA` is `972ac0d1da7e739b9e8839e7a6ae1010714e695d`
+  (`mercury-config` commit `3056ebb`, Deploy run 36422397083). A Job run started by
+  hand at 12:34 UTC created broken_links check `0df02af5`, which `thomas-laptop`
+  claimed and closed at 12:34:59 UTC. No lighthouse check was created, because run
+  `583bed4b` from 23 September is within the week; the first scheduled one comes
+  on the first hourly run a full week after run `583bed4b` was created on 23 September.
+- `PAGESPEED_API_KEY` is still unset in `mercury-config`, so a live fallback calls
+  PageSpeed keyless, whose shared quota was spent on 2026-09-24.
 
 ## Steps 6a and 6b are live (2026-09-28)
 
@@ -77,7 +117,7 @@ so steps 6a and 6b of the brief come next, ahead of the rest of 2d and ahead of
 steps 3 to 5. 2d stops where it stands. The claim window and the PageSpeed
 fallback are in (8bc9e4f to e88d0de). The crawl, `broken_links` in `KINDS`,
 `checks/compose.yml`, the Lighthouse integration test in CI and README claim seven
-all wait. **After 6b the next step is the rest of 2d, not 6c.** Then follow the
+all wait. **After 6b the next step was the rest of 2d, not 6c. 2d is now done, see above.** Then follow the
 brief's order unchanged: 3, 4, 5, 6c, 6d. Decision 43 holds: nothing claims React
 until 6b's exit is met on the live deploy, and claim six stays as it is until 6c.
 
