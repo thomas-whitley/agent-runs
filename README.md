@@ -24,15 +24,9 @@ uv run ruff check .
 uv run pytest
 ```
 
-## The demo page
+## The page at `/`
 
-`static/index.html` is served at `/`. It posts a task, opens an `EventSource` on
-the run's stream, and prints each event as it arrives. The kill connection
-button calls `close()` on the `EventSource`. The browser's own reconnect logic
-then reopens the connection with `Last-Event-ID` set to the last event id it
-saw, so the resume protocol runs itself with no code in the page for it. One
-static file, 48 lines, no build step. `docs/mercury.md` step 6a replaces it
-with a React app, so nothing here is meant to last.
+The API serves a built page from `web/dist` at `/`. It is registered after every API route, so `/health`, `/runs`, `/runs/{id}/events` and `/checks/*` never reach it, and any other GET gets the page. `tests/test_web_page.py` asserts both sides of that. For now the page shows only its title. The static demo page and its kill connection button are gone, so the way to watch a resume by hand is the `curl` walkthrough under the resume section below.
 
 ## Claims and their proof
 

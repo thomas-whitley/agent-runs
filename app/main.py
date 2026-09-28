@@ -1,10 +1,11 @@
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -18,7 +19,12 @@ from app.stream import event_stream, parse_last_event_id
 from app.tasks import CHECK_KINDS, DEFAULT_CHECK_KIND, TASK_TYPES
 from app.telemetry import configure_telemetry, start_run_trace
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+# web/ is built into web/dist, next to app/ both in the image and in a checkout.
+DEFAULT_WEB_DIST_DIR = Path(__file__).resolve().parent.parent / "web" / "dist"
+
+
+def _web_dist_dir() -> Path:
+    return Path(os.environ.get("WEB_DIST_DIR", DEFAULT_WEB_DIST_DIR)).resolve()
 
 
 class RunRequest(BaseModel):
@@ -96,10 +102,6 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/")
-    def demo_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
-
     @app.post("/runs", status_code=201, response_model=RunCreated)
     async def create_run(run: RunRequest, request: Request) -> RunCreated:
         task_type = TASK_TYPES[run.type]
@@ -163,6 +165,21 @@ def create_app() -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    web_dist = _web_dist_dir()
+
+    # Registered last, so every API route above answers first and only an
+    # unmatched GET reaches the page. A built file is served as itself;
+    # anything else gets index.html, which routes in the browser.
+    @app.get("/{path:path}", include_in_schema=False)
+    def page(path: str):
+        index = web_dist / "index.html"
+        if not index.is_file():
+            return PlainTextResponse("the page is not built", status_code=404)
+        candidate = (web_dist / path).resolve()
+        if path and candidate.is_relative_to(web_dist) and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
 
     # After the routes exist, not from the lifespan: see configure_telemetry's
     # docstring for why the timing matters.

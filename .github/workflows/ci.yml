@@ -74,6 +74,32 @@ jobs:
       - name: Vitest
         run: npm test
 
+  # web/ is the runs page, its own npm project like checks/. The image builds
+  # it again in its Node stage; this job is where a type error or a failing
+  # component test shows up.
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm test
+
   compose:
     runs-on: ubuntu-latest
     steps:

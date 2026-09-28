@@ -34,6 +34,17 @@ side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
 
+## The order changed on 2026-09-28: 6a and 6b before the rest of 2d
+
+Thomas needs the runs page on screen for a recording on Wednesday 30 September,
+so steps 6a and 6b of the brief come next, ahead of the rest of 2d and ahead of
+steps 3 to 5. 2d stops where it stands. The claim window and the PageSpeed
+fallback are in (8bc9e4f to e88d0de). The crawl, `broken_links` in `KINDS`,
+`checks/compose.yml`, the Lighthouse integration test in CI and README claim seven
+all wait. **After 6b the next step is the rest of 2d, not 6c.** Then follow the
+brief's order unchanged: 3, 4, 5, 6c, 6d. Decision 43 holds: nothing claims React
+until 6b's exit is met on the live deploy, and claim six stays as it is until 6c.
+
 ## Read these first
 
 - `CLAUDE.md` in the repo root, for the working rules and the writing rules.

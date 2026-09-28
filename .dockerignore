@@ -8,3 +8,6 @@ __pycache__
 *.pyc
 tests
 docs
+**/node_modules
+web/dist
+checks
