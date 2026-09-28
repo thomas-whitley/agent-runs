@@ -66,3 +66,12 @@ def test_a_path_outside_the_bundle_is_not_served(web_dist, start_server):
     response = httpx2.get(f"{base_url}/..%2Fsecret.txt")
 
     assert "not for the page" not in response.text
+
+
+def test_the_page_is_revalidated_on_every_load(web_dist, start_server):
+    """A cached index.html names asset hashes a redeploy has deleted."""
+    base_url = start_server()
+
+    for path in ("/", "/runs-page"):
+        response = httpx2.get(f"{base_url}{path}")
+        assert response.headers["cache-control"] == "no-cache"

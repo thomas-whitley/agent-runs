@@ -179,7 +179,9 @@ def create_app() -> FastAPI:
         candidate = (web_dist / path).resolve()
         if path and candidate.is_relative_to(web_dist) and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(index)
+        # Hashed assets can be cached; the index that names them cannot, or a
+        # browser keeps asking for files the last deploy deleted.
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
     # After the routes exist, not from the lifespan: see configure_telemetry's
     # docstring for why the timing matters.
