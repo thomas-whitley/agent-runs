@@ -40,6 +40,7 @@ The API serves a built page from `web/dist` at `/`. It is registered after every
 | A run is one trace across the API and the worker, with the context carried on the run row | `tests/test_loop.py::test_the_loop_writes_step_spans_as_children_of_the_stored_trace_context` | green |
 | A scheduled task runs with no client connected | `tests/test_scheduler.py`, and the live Job's log line and run row below | green |
 | A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | `tests/test_checks_integration.py` in CI's compose job, and `tests/test_scheduler.py` for the weekly schedule | green |
+| A budget trip ends a run with one event and one message | `tests/test_budget.py`, against the fake Telegram in `tests/telegram_fake.py` | green |
 
 ## Resume, and the test that proves it
 
@@ -443,6 +444,23 @@ with `status: error` rather than hanging, which is what the error path is for.
 ## Guards
 
 Three numbers are configuration, not code. `TOKEN_BUDGET` is 50000 per run and is counted in the loop. `MAX_RUNS_PER_DAY` is 20 and is counted in the worker from `runs.created_at`, and a refused run still gets its `done` event so a client waiting on the stream is not left hanging. `MODEL=stub` runs the loop with an offline model that needs no key, which is what CI uses so a push costs nothing.
+
+Two more caps sit above a run's own budget, and both are configuration too. `DAILY_TOKENS_PER_PROVIDER` is 500,000 tokens a day for each provider and `MONTHLY_BUDGET_USD` is 5. Before a run that calls a model starts, the worker adds up the tokens every step has recorded today on its provider, and this month across all of them. Gemini's free tier counts as nothing toward the month, and Haiku is charged at its output price on every token, since a run stores total tokens only, so the monthly figure can only overstate the bill. A tripped cap ends the run with one `done` event whose status is `budget` and names the cap, and sends one Telegram message to the owner's chat. A run that spends its own `TOKEN_BUDGET` sends the same one message.
+
+```
+tests/test_budget.py::test_a_provider_over_its_daily_tokens_trips PASSED
+tests/test_budget.py::test_under_the_daily_cap_nothing_trips PASSED
+tests/test_budget.py::test_yesterday_and_other_providers_do_not_count_today PASSED
+tests/test_budget.py::test_the_month_trips_on_dollars_across_providers PASSED
+tests/test_budget.py::test_free_tier_tokens_cost_nothing_toward_the_month PASSED
+tests/test_budget.py::test_a_tripped_run_ends_with_one_event_and_one_message PASSED
+tests/test_budget.py::test_a_chat_run_is_held_to_the_caps_too PASSED
+tests/test_budget.py::test_a_trip_with_no_owner_chat_still_ends_the_run PASSED
+tests/test_budget.py::test_a_run_that_spends_its_own_budget_sends_one_message PASSED
+tests/test_budget.py::test_the_caps_are_config[DAILY_TOKENS_PER_PROVIDER-1234] PASSED
+tests/test_budget.py::test_the_caps_are_config[MONTHLY_BUDGET_USD-2.5] PASSED
+============================== 11 passed in 9.02s ==============================
+```
 
 The loop talks to a `Model` protocol with one `complete` method. As of Mercury step 1 the provider is no longer read from `MODEL`: each task type in `app/tasks.py` names a provider, and `PROVIDERS` in `app/config.py` maps that name to a kind, a base URL, a model, and the env var holding its key. `pytest` names `gemini`, whose key is `MODEL_API_KEY`; the registry also carries `haiku`, whose key is `ANTHROPIC_API_KEY`, for the task types Mercury adds later. A run whose provider has no key configured is refused, the same way a run past the daily limit is, so its stream closes with `status: refused` rather than staying claimed forever. `.env.example` lists both key variables.
 

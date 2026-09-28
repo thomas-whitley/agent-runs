@@ -15,6 +15,11 @@ from typing import Any
 import psycopg
 from pydantic import ValidationError
 
+from app.loop import (
+    DEFAULT_MODEL_RETRY_ATTEMPTS,
+    DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
+    _complete_with_retry,
+)
 from app.model import Model
 from app.run_request import RunRequest
 from app.runs import finish_run, record_step
@@ -24,6 +29,7 @@ from app.telegram import TelegramClient, TelegramError
 logger = logging.getLogger("agent_runs.chat")
 
 MAX_TURNS = 20
+MODEL_DOWN = "The model is not answering right now. Try again in a few minutes."
 CANNOT = "I could not work out a task from that. Try again, or use /runs, /status or /cancel."
 NOT_YET = {
     "repo_chore": "Repo chores are not wired up yet.",
@@ -113,14 +119,30 @@ def run_chat(
     model: Model,
     telegram: TelegramClient | None,
     worker_id: str | None = None,
+    retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
 ) -> int:
     """Answer one chat run and return the tokens it used."""
     message, chat_id, message_id = conn.execute(
         "SELECT task, telegram_chat_id, telegram_message_id FROM runs WHERE id = %s", (run_id,)
     ).fetchone()
     history = conn.execute(_HISTORY, (chat_id, MAX_TURNS)).fetchall()
+    fields = {"run_id": run_id, "worker_id": worker_id}
 
-    reply = model.complete(SYSTEM, _prompt(history, message))
+    # The same retry the agent loop uses: four tries with 2, 4 and 6 second
+    # waits, which fits inside the lease this run does not heartbeat during.
+    try:
+        reply = _complete_with_retry(
+            model, SYSTEM, _prompt(history, message), retry_attempts, retry_backoff_seconds
+        )
+    except RuntimeError as error:
+        # Closed rather than left running, or the worker would take it again
+        # every time the lease ran out, and the chat would never hear back.
+        logger.error("chat run %s: %s", run_id, error, extra=fields)
+        record_step(conn, run_id, 1, "done", output={"status": "error"}, worker_id=worker_id)
+        finish_run(conn, run_id, "error", 0, worker_id=worker_id)
+        _reply(telegram, chat_id, message_id, MODEL_DOWN, run_id, fields)
+        return 0
     intent = _parse(reply.text) or {}
 
     created: str | None = None
@@ -141,14 +163,17 @@ def run_chat(
     record_step(conn, run_id, 2, "done", output={"status": "succeeded"}, worker_id=worker_id)
     finish_run(conn, run_id, "succeeded", reply.tokens, worker_id=worker_id)
 
-    fields = {"run_id": run_id, "worker_id": worker_id}
     action = outcome["action"] or "nothing"
     logger.info("chat run %s answered with %s", run_id, action, extra=fields)
+    _reply(telegram, chat_id, message_id, answer, run_id, fields)
+    return reply.tokens
+
+
+def _reply(telegram, chat_id, message_id, text: str, run_id: str, fields: dict) -> None:
     if telegram is None:
         logger.error("no TELEGRAM_BOT_TOKEN, so chat run %s could not reply", run_id, extra=fields)
-        return reply.tokens
+        return
     try:
-        telegram.edit_message_text(chat_id, message_id, answer)
+        telegram.edit_message_text(chat_id, message_id, text)
     except TelegramError as error:
         logger.error("chat run %s could not reply: %s", run_id, error, extra=fields)
-    return reply.tokens

@@ -229,3 +229,53 @@ def test_memory_keeps_only_the_last_turns_per_chat(migrated_db, fake_telegram):
     assert migrated_db.execute(
         "SELECT count(*) FROM telegram_turns WHERE chat_id = 7"
     ).fetchone() == (1,)
+
+
+class FlakyModel:
+    """Fails the way Gemini did on 2026-09-28 (503, high demand), then answers."""
+
+    def __init__(self, failures: int, reply: str) -> None:
+        self.failures = failures
+        self.reply = reply
+        self.calls = 0
+
+    def complete(self, system: str, prompt: str):
+        from app.model import ModelReply
+
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise RuntimeError("Error code: 503 - This model is currently experiencing high demand")
+        return ModelReply(text=self.reply, tokens=50)
+
+
+def test_a_model_that_fails_then_answers_is_retried(bot, fake_telegram, migrated_db):
+    say(bot, "check my site")
+    model = FlakyModel(failures=2, reply=json.dumps({"action": "ask", "question": "Which URL?"}))
+    client = TelegramClient("123:abc", base_url=fake_telegram.url)
+
+    run_chat(migrated_db, chat_run(migrated_db), model, client, retry_backoff_seconds=0)
+
+    assert model.calls == 3
+    assert edits(fake_telegram) == ["Which URL?"]
+
+
+def test_a_model_that_never_answers_closes_the_run_and_says_so(bot, fake_telegram, migrated_db):
+    say(bot, "check my site")
+    run_id = chat_run(migrated_db)
+    model = FlakyModel(failures=99, reply="")
+    client = TelegramClient("123:abc", base_url=fake_telegram.url)
+
+    run_chat(migrated_db, run_id, model, client, retry_backoff_seconds=0)
+
+    status, finished = migrated_db.execute(
+        "SELECT status, finished_at IS NOT NULL FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()
+    assert (status, finished) == ("error", True)
+    [event] = migrated_db.execute(
+        "SELECT payload FROM events WHERE run_id = %s", (run_id,)
+    ).fetchall()
+    assert event[0]["kind"] == "done" and event[0]["output"]["status"] == "error"
+    assert edits(fake_telegram) == [
+        "The model is not answering right now. Try again in a few minutes."
+    ]
+    assert migrated_db.execute("SELECT count(*) FROM telegram_turns").fetchone() == (0,)
