@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, type ClaimedCheck, type Closed, type Held } from "../src/api.js";
+import type { CrawlSummary } from "../src/crawl.js";
 import { createLogger } from "../src/log.js";
 import type { LighthouseResult } from "../src/summary.js";
 import { pollOnce, runOnce, type WorkerDeps } from "../src/worker.js";
@@ -37,10 +38,22 @@ function fakeApi(options: { claim?: ClaimedCheck | null; heartbeat?: Held; resul
   return { api, calls };
 }
 
-function deps(api: WorkerDeps["api"], runLighthouse: WorkerDeps["runLighthouse"]) {
+const CRAWL: CrawlSummary = {
+  pages_checked: 12,
+  broken: [{ url: "https://example.com/gone", status: 404, found_on: "https://example.com/" }],
+  broken_count: 1,
+  page_limit_reached: false,
+  robots_skipped: 0,
+};
+
+function deps(
+  api: WorkerDeps["api"],
+  runLighthouse: WorkerDeps["runLighthouse"],
+  runCrawl: WorkerDeps["runCrawl"] = async () => CRAWL,
+) {
   const lines: string[] = [];
   const log = createLogger({ workerId: "laptop-1", write: (line) => lines.push(line) });
-  const workerDeps: WorkerDeps = { api, runLighthouse, log, heartbeatMs: 30_000 };
+  const workerDeps: WorkerDeps = { api, runLighthouse, runCrawl, log, heartbeatMs: 30_000 };
   return { workerDeps, lines };
 }
 
@@ -57,13 +70,39 @@ describe("runOnce", () => {
     expect(calls.results).toEqual([]);
   });
 
-  it("claims lighthouse checks only", async () => {
+  it("claims lighthouse and broken_links checks", async () => {
     const { api } = fakeApi({ claim: null });
     const { workerDeps } = deps(api, async () => REPORT);
 
     await runOnce(workerDeps);
 
-    expect(api.claim).toHaveBeenCalledWith(["lighthouse"]);
+    expect(api.claim).toHaveBeenCalledWith(["lighthouse", "broken_links"]);
+  });
+
+  it("crawls a broken_links check and posts the crawl summary as it is", async () => {
+    const { api, calls } = fakeApi({ claim: { ...CHECK, kind: "broken_links" } });
+    const runLighthouse = vi.fn(async () => REPORT);
+    const runCrawl = vi.fn(async () => CRAWL);
+    const { workerDeps } = deps(api, runLighthouse, runCrawl);
+
+    expect(await runOnce(workerDeps)).toBe("closed");
+
+    expect(runCrawl).toHaveBeenCalledWith("https://example.com");
+    expect(runLighthouse).not.toHaveBeenCalled();
+    expect(calls.results[0]?.result).toEqual(CRAWL);
+  });
+
+  it("posts the error and the log tail when the crawl fails", async () => {
+    const { api, calls } = fakeApi({ claim: { ...CHECK, kind: "broken_links" } });
+    const { workerDeps } = deps(api, async () => REPORT, async () => {
+      throw new Error("robots.txt parser blew up");
+    });
+
+    expect(await runOnce(workerDeps)).toBe("failed");
+
+    const result = calls.results[0]?.result as { error: string; log_tail: string[] };
+    expect(result.error).toBe("robots.txt parser blew up");
+    expect(result.log_tail.length).toBeGreaterThan(0);
   });
 
   it("runs Lighthouse on the claimed URL and posts the summary, with no log tail", async () => {

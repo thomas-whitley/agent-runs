@@ -1,6 +1,6 @@
-// The checks worker's entry point. It polls the API for a Lighthouse check,
-// runs one at a time, and sleeps POLL_SECONDS whenever there is nothing to
-// do or the API cannot be reached. `--once` polls a single time and exits.
+// The checks worker's entry point. It polls the API for a Lighthouse or
+// broken link check, runs one at a time, and sleeps POLL_SECONDS whenever
+// there is nothing to do or the API cannot be reached. `--once` polls a single time and exits.
 //
 // Environment: API_BASE_URL and MERCURY_BEARER_TOKEN are required,
 // WORKER_ID defaults to the hostname, POLL_SECONDS to 60.
@@ -9,6 +9,7 @@ import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { ChecksApi } from "./api.js";
+import { crawl } from "./crawl.js";
 import { runLighthouse } from "./lighthouse.js";
 import { createLogger } from "./log.js";
 import { pollOnce } from "./worker.js";
@@ -31,7 +32,7 @@ const api = new ChecksApi({
   token: required("MERCURY_BEARER_TOKEN"),
   workerId,
 });
-const deps = { api, runLighthouse, log, heartbeatMs: 30_000 };
+const deps = { api, runLighthouse, runCrawl: (url: string) => crawl(url), log, heartbeatMs: 30_000 };
 
 // A signal ends an idle sleep at once, and lets a running check finish.
 const stop = new AbortController();

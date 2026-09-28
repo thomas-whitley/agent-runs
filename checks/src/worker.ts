@@ -1,12 +1,12 @@
-// One cycle of the self hosted checks worker: claim a Lighthouse check, run
-// it while heartbeating, and post the summary. Broken link crawls are
-// claimed here too once the crawl exists (build brief step 2d).
+// One cycle of the self hosted checks worker: claim a Lighthouse or broken
+// link check, run it while heartbeating, and post the summary.
 
 import type { ClaimedCheck, Closed, Held } from "./api.js";
+import type { CrawlSummary } from "./crawl.js";
 import type { Logger } from "./log.js";
 import { type LighthouseResult, summarize } from "./summary.js";
 
-export const KINDS = ["lighthouse"];
+export const KINDS = ["lighthouse", "broken_links"];
 
 export interface WorkerApi {
   claim(kinds: string[]): Promise<ClaimedCheck | null>;
@@ -17,6 +17,7 @@ export interface WorkerApi {
 export interface WorkerDeps {
   api: WorkerApi;
   runLighthouse: (url: string) => Promise<LighthouseResult>;
+  runCrawl: (url: string) => Promise<CrawlSummary>;
   log: Logger;
   // 30 seconds against a two minute lease, per docs/mercury.md.
   heartbeatMs: number;
@@ -54,11 +55,13 @@ export async function runOnce(deps: WorkerDeps): Promise<Outcome> {
   let result: Record<string, unknown>;
   let failed = false;
   try {
-    const summary = summarize(await deps.runLighthouse(check.url));
-    result = { ...summary };
+    result =
+      check.kind === "broken_links"
+        ? { ...(await deps.runCrawl(check.url)) }
+        : { ...summarize(await deps.runLighthouse(check.url)) };
   } catch (error) {
     failed = true;
-    log.error(`lighthouse failed for check ${check.id}: ${reason(error)}`, fields);
+    log.error(`${check.kind} failed for check ${check.id}: ${reason(error)}`, fields);
     result = { error: reason(error), log_tail: log.tail() };
   } finally {
     clearInterval(beat);
