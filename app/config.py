@@ -82,6 +82,12 @@ class Settings:
     telegram_api_url: str = "https://api.telegram.org"
     daily_tokens_per_provider: int = 500_000
     monthly_budget_usd: float = 5.0
+    # Repo chores. The token is contents and pull requests only, on the named
+    # repos. GITHUB_CLONE_BASE is a file:// directory in the tests.
+    mercury_github_token: str | None = None
+    github_api_url: str = "https://api.github.com"
+    github_clone_base: str = "https://github.com"
+    repo_test_timeout_seconds: float = 600.0
 
 
 def _default_worker_id() -> str:
@@ -115,4 +121,8 @@ def load_settings() -> Settings:
         telegram_api_url=os.environ.get("TELEGRAM_API_URL") or "https://api.telegram.org",
         daily_tokens_per_provider=int(os.environ.get("DAILY_TOKENS_PER_PROVIDER", "500000")),
         monthly_budget_usd=float(os.environ.get("MONTHLY_BUDGET_USD", "5")),
+        mercury_github_token=os.environ.get("MERCURY_GITHUB_TOKEN") or None,
+        github_api_url=os.environ.get("GITHUB_API_URL") or "https://api.github.com",
+        github_clone_base=os.environ.get("GITHUB_CLONE_BASE") or "https://github.com",
+        repo_test_timeout_seconds=float(os.environ.get("REPO_TEST_TIMEOUT_SECONDS", "600")),
     )

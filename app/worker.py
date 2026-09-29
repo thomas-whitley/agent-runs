@@ -26,6 +26,7 @@ from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.pagespeed import run_pagespeed
 from app.progress import push_progress
+from app.repo_chore import ChoreSetup, GitHubClient, run_repo_chore
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, finish_run, heartbeat, record_step
 from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES
@@ -38,7 +39,7 @@ logger = logging.getLogger("agent_runs.worker")
 # (app/chat.py). A site_check the worker takes over runs on PageSpeed in
 # run_cloud_check. Every other
 # registered type is refused, closing its stream, until its own step lands.
-_RUNNABLE_TYPES = {"pytest", "chat"}
+_RUNNABLE_TYPES = {"pytest", "chat", "repo_chore"}
 
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
 # lease. The second case is a worker that was killed outright.
@@ -294,6 +295,9 @@ def _process_run(
         refuse_run(conn, run_id, str(error))
         return None
 
+    if task_type_name == "repo_chore":
+        return _run_chore(conn, run_id, model, settings, repos, telegram, task_type.budget_tokens)
+
     if task_type_name == "chat":
         tokens = run_chat(conn, run_id, model, telegram, worker_id=settings.worker_id, repos=repos)
         return LoopResult(status="succeeded", attempts=1, tokens_used=tokens)
@@ -309,6 +313,40 @@ def _process_run(
         worker_id=settings.worker_id,
         tracer=tracer,
         provider=task_type.provider,
+    )
+
+
+def _run_chore(
+    conn: psycopg.Connection,
+    run_id: str,
+    model: Model,
+    settings: Settings,
+    repos: tuple[RepoConfig, ...],
+    telegram: TelegramClient | None,
+    token_budget: int,
+) -> LoopResult | None:
+    name = conn.execute("SELECT repo FROM runs WHERE id = %s", (run_id,)).fetchone()[0]
+    repo = next((r for r in repos if r.name == name and r.test_command), None)
+    if repo is None:
+        # Approved while it was listed, and taken out of mercury.yaml since.
+        refuse_run(conn, run_id, f"{name} is not a repo with a test_command in mercury.yaml")
+        return None
+    setup = ChoreSetup(
+        repo=repo,
+        clone_base=settings.github_clone_base,
+        github=GitHubClient(settings.mercury_github_token, settings.github_api_url),
+        token=settings.mercury_github_token,
+        test_timeout_seconds=settings.repo_test_timeout_seconds,
+        heartbeat_database_url=settings.database_url,
+    )
+    return run_repo_chore(
+        conn,
+        run_id,
+        model,
+        setup,
+        worker_id=settings.worker_id,
+        token_budget=token_budget,
+        on_step=lambda: _step_landed(conn, run_id, settings.worker_id, telegram),
     )
 
 

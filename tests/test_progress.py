@@ -59,6 +59,51 @@ def test_render_shows_each_step_and_never_the_code_or_the_test_output(migrated_d
     assert "SECRET" not in text
 
 
+def test_render_shows_a_repo_chore_without_its_diff_or_test_output(migrated_db):
+    run_id = insert(migrated_db, type_="repo_chore", task="Add subtract")
+    record_step(migrated_db, run_id, 1, "clone", output={"resumed": False, "base": "main"})
+    record_step(migrated_db, run_id, 2, "read", output={"files": ["calc.py"]})
+    record_step(migrated_db, run_id, 3, "edit", output={"attempt": 1, "files": ["a.py", "b.py"]})
+    record_step(migrated_db, run_id, 4, "test", output={"attempt": 1, "passed": False})
+    record_step(
+        migrated_db,
+        run_id,
+        5,
+        "done",
+        output={
+            "status": "failed",
+            "reason": "tests still failing after 3 attempts",
+            "diff": "SECRET_DIFF",
+            "test_output": "SECRET_OUTPUT",
+        },
+    )
+
+    lines = render_progress(migrated_db, run_id).splitlines()[1:]
+
+    assert lines == [
+        "1 cloned, branched from main",
+        "2 read 1 file",
+        "3 attempt 1 changed 2 files",
+        "4 tests failed",
+        "5 done, failed: tests still failing after 3 attempts",
+    ]
+
+
+def test_render_shows_the_pull_request_link(migrated_db):
+    run_id = insert(migrated_db, type_="repo_chore", task="Add subtract")
+    record_step(migrated_db, run_id, 1, "clone", output={"resumed": True, "base": "main"})
+    record_step(migrated_db, run_id, 2, "push", output={"branch": "agent/x"})
+    record_step(migrated_db, run_id, 3, "pr", output={"url": "https://github.com/o/r/pull/4"})
+
+    lines = render_progress(migrated_db, run_id).splitlines()[1:]
+
+    assert lines == [
+        "1 picked up the branch a first worker pushed",
+        "2 pushed agent/x",
+        "3 opened https://github.com/o/r/pull/4",
+    ]
+
+
 def test_render_summarises_a_lighthouse_and_a_crawl_result(migrated_db):
     lighthouse = insert(migrated_db, "site_check", "https://a.example/", check_kind="lighthouse")
     record_step(

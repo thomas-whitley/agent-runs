@@ -47,6 +47,25 @@ def _step_line(seq: int, kind: str, output: dict[str, Any] | None) -> str:
         text = "pytest passed" if output.get("passed") else "pytest failed"
     elif kind == "check":
         text = _check_line(output)
+    elif kind == "clone":
+        text = (
+            "picked up the branch a first worker pushed"
+            if output.get("resumed")
+            else f"cloned, branched from {output.get('base', 'the default branch')}"
+        )
+    elif kind == "read":
+        count = len(output.get("files") or [])
+        text = f"read {count} file{'' if count == 1 else 's'}"
+    elif kind == "edit":
+        count = len(output.get("files") or [])
+        changed = f"changed {count} file{'' if count == 1 else 's'}" if count else "not usable"
+        text = f"attempt {output.get('attempt')} {changed}"
+    elif kind == "test":
+        text = "tests passed" if output.get("passed") else "tests failed"
+    elif kind == "push":
+        text = f"pushed {output.get('branch')}"
+    elif kind == "pr":
+        text = f"opened {output.get('url')}"
     elif kind == "done":
         text = f"done, {output.get('status', 'finished')}"
         if output.get("reason"):
