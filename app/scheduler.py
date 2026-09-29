@@ -18,14 +18,16 @@ import urllib.request
 import psycopg
 from opentelemetry import trace
 
+from app.approvals import ask, expire_due
 from app.checks import check_site
 from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.mercury_config import load_mercury_config
 from app.migrations import apply_migrations
 from app.runs import finish_run, record_step
-from app.schedule_state import is_suspended, record_failure, record_success
+from app.schedule_state import SUSPEND_AFTER, is_suspended, record_failure, record_success
 from app.tasks import SELF_HOSTED_CHECK_KINDS
+from app.telegram import TelegramClient, TelegramError, telegram_client
 from app.telemetry import configure_telemetry
 
 logger = logging.getLogger("agent_runs.scheduler")
@@ -76,9 +78,14 @@ def run_due_checks(
     sites: tuple[str, ...],
     api_base_url: str,
     bearer_token: str,
+    *,
+    telegram: TelegramClient | None = None,
+    chat_id: int | None = None,
 ) -> list[str]:
     """Check every configured site not currently suspended. Returns the ids
-    of the runs created, so a caller (or a test) can inspect them."""
+    of the runs created, so a caller (or a test) can inspect them. With a
+    Telegram client and chat, the failure that suspends a site sends one
+    message with a Resume button."""
     created: list[str] = []
 
     for url in sites:
@@ -95,7 +102,7 @@ def run_due_checks(
             run_id = _create_run(api_base_url, bearer_token, url)
         except OSError:
             logger.exception("could not create a run for %s, counted as a failure", url)
-            record_failure(conn, schedule_name)
+            _fail(conn, schedule_name, url, telegram, chat_id)
             continue
 
         logger.info("scheduled run %s created with no client", run_id, extra={"run_id": run_id})
@@ -119,9 +126,26 @@ def run_due_checks(
         if result.passed:
             record_success(conn, schedule_name)
         else:
-            record_failure(conn, schedule_name)
+            _fail(conn, schedule_name, url, telegram, chat_id)
 
     return created
+
+
+def _fail(
+    conn: psycopg.Connection,
+    schedule_name: str,
+    url: str,
+    telegram: TelegramClient | None,
+    chat_id: int | None,
+) -> None:
+    if not record_failure(conn, schedule_name) or telegram is None or chat_id is None:
+        return
+    text = f"{url} failed {SUSPEND_AFTER} checks in a row, so its hourly check is suspended."
+    try:
+        ask(conn, telegram, chat_id, "resume_schedule", text, schedule_name=schedule_name)
+    except TelegramError as error:
+        # The suspension stands and /status shows it; only the message is lost.
+        logger.error("could not send the suspension message: %s", error)
 
 
 def schedule_weekly_checks(
@@ -165,9 +189,16 @@ def main() -> None:  # pragma: no cover - the process entry point
 
     config = load_mercury_config(settings.mercury_config_path)
 
+    telegram = telegram_client(settings)
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        expire_due(conn, telegram)
         created = run_due_checks(
-            conn, config.sites, settings.api_base_url, settings.mercury_bearer_token
+            conn,
+            config.sites,
+            settings.api_base_url,
+            settings.mercury_bearer_token,
+            telegram=telegram,
+            chat_id=config.telegram_chat_id,
         )
         created += schedule_weekly_checks(
             conn, config.pages, settings.api_base_url, settings.mercury_bearer_token

@@ -20,6 +20,7 @@ SET consecutive_failures = consecutive_failures + 1,
         ELSE suspended_at
     END
 WHERE name = %s
+RETURNING consecutive_failures = %s
 """
 
 _RECORD_SUCCESS = """
@@ -27,7 +28,7 @@ UPDATE schedule_state SET consecutive_failures = 0
 WHERE name = %s AND suspended = false
 """
 
-_RESUME = """
+RESUME = """
 UPDATE schedule_state
 SET suspended = false, consecutive_failures = 0, suspended_at = NULL
 WHERE name = %s
@@ -40,9 +41,14 @@ def is_suspended(conn: psycopg.Connection, name: str) -> bool:
     return bool(row[0]) if row else False
 
 
-def record_failure(conn: psycopg.Connection, name: str) -> None:
+def record_failure(conn: psycopg.Connection, name: str) -> bool:
+    """Count a failure. True when this one suspended the schedule, so the
+    caller sends the suspension message once and not every hour after."""
     conn.execute(_ENSURE_ROW, (name,))
-    conn.execute(_RECORD_FAILURE, (SUSPEND_AFTER, SUSPEND_AFTER, name))
+    row = conn.execute(
+        _RECORD_FAILURE, (SUSPEND_AFTER, SUSPEND_AFTER, name, SUSPEND_AFTER)
+    ).fetchone()
+    return bool(row[0])
 
 
 def record_success(conn: psycopg.Connection, name: str) -> None:
@@ -52,4 +58,4 @@ def record_success(conn: psycopg.Connection, name: str) -> None:
 
 def resume(conn: psycopg.Connection, name: str) -> None:
     conn.execute(_ENSURE_ROW, (name,))
-    conn.execute(_RESUME, (name,))
+    conn.execute(RESUME, (name,))

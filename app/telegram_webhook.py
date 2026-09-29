@@ -21,6 +21,9 @@ from fastapi import APIRouter, HTTPException, Request
 from psycopg.types.json import Jsonb
 from starlette.concurrency import run_in_threadpool
 
+from app import approvals
+from app.runs import CANCEL_RUN, CANCELLED, DONE_EVENT, DONE_STEP, NEXT_EVENT_SEQ
+from app.schedule_state import RESUME
 from app.tasks import TASK_TYPES
 from app.telegram import TelegramClient, TelegramError
 
@@ -33,6 +36,7 @@ RECENT_RUNS = 5
 CANCEL_USAGE = "Usage: /cancel <run id or its first 8 characters>"
 # Eight hex characters is what /runs shows; anything shorter could match many.
 _RUN_PREFIX = re.compile(r"^[0-9a-f-]{8,36}$")
+_BUTTON = re.compile(r"^approval:(\d+):(yes|no)$")
 
 _RECENT = """
 SELECT id, type, status, tokens_used,
@@ -55,27 +59,15 @@ SELECT count(*) FILTER (WHERE claimed_by IS NOT NULL AND type <> 'site_check'),
 FROM runs WHERE created_at >= date_trunc('day', now())
 """
 
-# Clearing claimed_by fences out a worker still running it: its next step
-# write and heartbeat both need claimed_by to be its own id.
-_CANCEL = """
-UPDATE runs SET status = 'cancelled', finished_at = now(), claimed_by = NULL
-WHERE id = (
-    SELECT id FROM runs
-    WHERE finished_at IS NULL AND id::text LIKE %s
-    ORDER BY created_at DESC LIMIT 1
-)
-RETURNING id
+_FIND_UNFINISHED = """
+SELECT id FROM runs
+WHERE finished_at IS NULL AND id::text LIKE %s
+ORDER BY created_at DESC LIMIT 1
 """
 
-_NEXT_SEQ = "SELECT coalesce(max(seq), 0) + 1 FROM events WHERE run_id = %s"
-_DONE_STEP = """
-INSERT INTO steps (run_id, seq, kind, output, tokens, finished_at)
-VALUES (%s, %s, 'done', %s, 0, now()) ON CONFLICT (run_id, seq) DO NOTHING
-"""
-_DONE_EVENT = """
-INSERT INTO events (run_id, seq, payload) VALUES (%s, %s, %s)
-ON CONFLICT (run_id, seq) DO NOTHING
-"""
+_SUSPENDED_NAMES = "SELECT name FROM schedule_state WHERE suspended ORDER BY name"
+RESUME_USAGE = "Usage: /resume <site>"
+UPTIME_PREFIX = "site_uptime:"
 
 
 def _check_secret(request: Request) -> None:
@@ -89,6 +81,10 @@ def _check_secret(request: Request) -> None:
 async def telegram_webhook(request: Request) -> dict:
     _check_secret(request)
     update = await request.json()
+
+    if "callback_query" in update:
+        await _on_button(request, update["callback_query"])
+        return {}
 
     message = update.get("message") or {}
     chat_id = (message.get("chat") or {}).get("id")
@@ -147,6 +143,8 @@ async def _answer(request: Request, text: str) -> str | None:
         return await _status(pool, request.app.state.mercury.sites, request)
     if command == "/cancel":
         return await _cancel(pool, argument.strip().lower())
+    if command == "/resume":
+        return await _resume(pool, argument.strip())
     return None
 
 
@@ -209,15 +207,95 @@ async def _cancel(pool, prefix: str) -> str:
         return CANCEL_USAGE
     async with pool.connection() as conn:
         async with conn.transaction():
-            row = await (await conn.execute(_CANCEL, (f"{prefix}%",))).fetchone()
-            if row is None:
+            row = await (await conn.execute(_FIND_UNFINISHED, (f"{prefix}%",))).fetchone()
+            if row is None or not await _close_cancelled(conn, row[0]):
                 return f"No unfinished run starts with {prefix}."
-            run_id = row[0]
-            seq = (await (await conn.execute(_NEXT_SEQ, (run_id,))).fetchone())[0]
-            done = {"status": "cancelled"}
-            await conn.execute(_DONE_STEP, (run_id, seq, Jsonb(done)))
-            await conn.execute(
-                _DONE_EVENT, (run_id, seq, Jsonb({"kind": "done", "seq": seq, "output": done}))
-            )
-    logger.info("cancelled run %s from Telegram", run_id, extra={"run_id": str(run_id)})
+    logger.info("cancelled run %s from Telegram", row[0], extra={"run_id": str(row[0])})
     return f"Cancelled {prefix[:8]}."
+
+
+async def _close_cancelled(conn, run_id) -> bool:
+    """The async twin of app.runs.cancel_run, inside the caller's transaction."""
+    if (await conn.execute(CANCEL_RUN, (run_id,))).rowcount == 0:
+        return False
+    seq = (await (await conn.execute(NEXT_EVENT_SEQ, (run_id,))).fetchone())[0]
+    await conn.execute(DONE_STEP, (run_id, seq, Jsonb(CANCELLED)))
+    await conn.execute(
+        DONE_EVENT, (run_id, seq, Jsonb({"kind": "done", "seq": seq, "output": CANCELLED}))
+    )
+    return True
+
+
+async def _resume(pool, site: str) -> str:
+    async with pool.connection() as conn:
+        if not site:
+            names = [row[0] for row in await (await conn.execute(_SUSPENDED_NAMES)).fetchall()]
+            listed = "\n".join(name.removeprefix(UPTIME_PREFIX) for name in names)
+            return f"{RESUME_USAGE}\nSuspended:\n{listed}" if names else "Nothing is suspended."
+        name = site if site.startswith(UPTIME_PREFIX) else f"{UPTIME_PREFIX}{site}"
+        if (await conn.execute(RESUME, (name,))).rowcount == 0:
+            return f"No schedule named {site}."
+    logger.info("resumed %s from Telegram", name)
+    return f"Resumed {site}."
+
+
+async def _on_button(request: Request, callback: dict) -> None:
+    """A press on an approval's button. Only the allowed chat's presses count,
+    and a question already answered or past its expiry changes nothing more."""
+    chat_id = ((callback.get("message") or {}).get("chat") or {}).get("id")
+    if chat_id != request.app.state.mercury.telegram_chat_id:
+        logger.info("ignored a button press from a chat not on the allowlist")
+        return
+    match = _BUTTON.match(callback.get("data") or "")
+    if match is None:
+        return
+    approval_id, choice = int(match[1]), match[2]
+
+    async with request.app.state.pool.connection() as conn:
+        async with conn.transaction():
+            row = await (await conn.execute(approvals.LOCK, (approval_id,))).fetchone()
+            if row is None or row[3] != chat_id:
+                return
+            action, run_id, schedule_name, _, message_id, text, answer, expired = row
+            if answer is not None:
+                note = None
+                notice = f"Already {answer}."
+            elif expired:
+                note = approvals.EXPIRED_NOTE
+                await conn.execute(approvals.ANSWER, ("expired", approval_id))
+                if action == "start_run":
+                    await _close_cancelled(conn, run_id)
+            elif choice == "yes":
+                note = approvals.APPROVED_NOTE[action]
+                await conn.execute(approvals.ANSWER, ("approved", approval_id))
+                if action == "start_run":
+                    await conn.execute(approvals.RELEASE_RUN, (run_id,))
+                else:
+                    await conn.execute(RESUME, (schedule_name,))
+            else:
+                note = approvals.DECLINED_NOTE[action]
+                await conn.execute(approvals.ANSWER, ("declined", approval_id))
+                if action == "start_run":
+                    await _close_cancelled(conn, run_id)
+    logger.info("approval %s answered %s", approval_id, note or "again")
+
+    client = _client(request)
+    if client is None:
+        return
+    try:
+        if note is not None and message_id is not None:
+            await run_in_threadpool(
+                client.edit_message_text, chat_id, message_id, f"{text}\n\n{note}"
+            )
+        await run_in_threadpool(
+            client.answer_callback_query, callback.get("id", ""), note or notice
+        )
+    except TelegramError as error:
+        logger.error("could not show the answer in the chat: %s", error)
+
+
+def _client(request: Request) -> TelegramClient | None:
+    settings = request.app.state.settings
+    if not settings.telegram_bot_token:
+        return None
+    return TelegramClient(settings.telegram_bot_token, settings.telegram_api_url)

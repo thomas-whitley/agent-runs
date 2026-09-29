@@ -25,13 +25,28 @@ class TelegramClient:
         self._token = token
         self._base_url = base_url.rstrip("/")
 
-    def send_message(self, chat_id: int, text: str) -> int:
-        """Send text to the chat and return the new message's id."""
-        result = self._call("sendMessage", {"chat_id": chat_id, "text": text})
+    def send_message(
+        self, chat_id: int, text: str, buttons: list[tuple[str, str]] | None = None
+    ) -> int:
+        """Send text to the chat and return the new message's id. Each button
+        is a label and the callback data Telegram sends back when it is pressed."""
+        payload: dict = {"chat_id": chat_id, "text": text}
+        if buttons:
+            payload["reply_markup"] = {
+                "inline_keyboard": [
+                    [{"text": label, "callback_data": data} for label, data in buttons]
+                ]
+            }
+        result = self._call("sendMessage", payload)
         return result["message_id"]
 
+    def answer_callback_query(self, callback_query_id: str, text: str) -> None:
+        """Stop the pressed button's spinner and show a short notice."""
+        self._call("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
+
     def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:
-        """Replace a message's text. Unchanged text is not an error."""
+        """Replace a message's text. Any buttons it had are removed, since the
+        edit sends no reply_markup. Unchanged text is not an error."""
         try:
             self._call(
                 "editMessageText", {"chat_id": chat_id, "message_id": message_id, "text": text}

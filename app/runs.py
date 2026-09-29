@@ -147,3 +147,36 @@ def finish_run(
     else:
         cursor = conn.execute(_FINISH_IF_OWNED, (status, tokens_used, run_id, worker_id))
     return cursor.rowcount == 1
+
+
+# Clearing claimed_by fences out a worker still running it: its next step
+# write and heartbeat both need claimed_by to be its own id. /cancel, a
+# declined approval and an expired one all close a run this way.
+CANCEL_RUN = """
+UPDATE runs SET status = 'cancelled', finished_at = now(), claimed_by = NULL
+WHERE id = %s AND finished_at IS NULL
+"""
+NEXT_EVENT_SEQ = "SELECT coalesce(max(seq), 0) + 1 FROM events WHERE run_id = %s"
+DONE_STEP = """
+INSERT INTO steps (run_id, seq, kind, output, tokens, finished_at)
+VALUES (%s, %s, 'done', %s, 0, now()) ON CONFLICT (run_id, seq) DO NOTHING
+"""
+DONE_EVENT = """
+INSERT INTO events (run_id, seq, payload) VALUES (%s, %s, %s)
+ON CONFLICT (run_id, seq) DO NOTHING
+"""
+CANCELLED = {"status": "cancelled"}
+
+
+def cancel_run(conn: psycopg.Connection, run_id: str) -> bool:
+    """Close an unfinished run as cancelled with its done event. False means
+    it had already finished, so nothing was written."""
+    with conn.transaction():
+        if conn.execute(CANCEL_RUN, (run_id,)).rowcount == 0:
+            return False
+        seq = conn.execute(NEXT_EVENT_SEQ, (run_id,)).fetchone()[0]
+        conn.execute(DONE_STEP, (run_id, seq, Jsonb(CANCELLED)))
+        conn.execute(
+            DONE_EVENT, (run_id, seq, Jsonb({"kind": "done", "seq": seq, "output": CANCELLED}))
+        )
+    return True
