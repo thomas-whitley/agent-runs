@@ -3,7 +3,7 @@
 // there is nothing to do or the API cannot be reached. `--once` polls a single time and exits.
 //
 // Environment: API_BASE_URL and MERCURY_BEARER_TOKEN are required,
-// WORKER_ID defaults to the hostname, POLL_SECONDS to 60.
+// WORKER_ID defaults to the hostname, POLL_SECONDS to 3600.
 
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -23,7 +23,7 @@ function required(name: string): string {
 }
 
 const workerId = process.env.WORKER_ID || hostname();
-const pollMs = Number(process.env.POLL_SECONDS ?? "60") * 1000;
+const pollMs = Number(process.env.POLL_SECONDS ?? "3600") * 1000;
 const once = process.argv.includes("--once");
 const log = createLogger({ workerId });
 

@@ -14,7 +14,7 @@ npm run build
 API_BASE_URL=https://<api host> MERCURY_BEARER_TOKEN=<token> npm start
 ```
 
-`WORKER_ID` defaults to the hostname and `POLL_SECONDS` to 60. `node dist/main.js --once` polls a single time and exits. While a check runs, the worker heartbeats every 30 seconds against the API's two minute lease. SIGINT or SIGTERM ends an idle wait at once and lets a running check finish.
+`WORKER_ID` defaults to the hostname and `POLL_SECONDS` to 3600 (one hour). Any poll under five minutes apart keeps the API replica from scaling to zero, and weekly checks do not need to start within the minute. `node dist/main.js --once` polls a single time and exits. While a check runs, the worker heartbeats every 30 seconds against the API's two minute lease. SIGINT or SIGTERM ends an idle wait at once and lets a running check finish.
 
 ## Tests
 

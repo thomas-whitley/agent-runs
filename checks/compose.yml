@@ -13,4 +13,4 @@ services:
     env_file: .env
     environment:
       WORKER_ID: ${WORKER_ID:-self-hosted}
-      POLL_SECONDS: ${POLL_SECONDS:-60}
+      POLL_SECONDS: ${POLL_SECONDS:-3600}
