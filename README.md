@@ -41,6 +41,7 @@ The API serves a built page from `web/dist` at `/`. It is registered after every
 | A scheduled task runs with no client connected | `tests/test_scheduler.py`, and the live Job's log line and run row below | green |
 | A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | `tests/test_checks_integration.py` in CI's compose job, and `tests/test_scheduler.py` for the weekly schedule | green |
 | A budget trip ends a run with one event and one message | `tests/test_budget.py`, against the fake Telegram in `tests/telegram_fake.py` | green |
+| The webhook cold start is measured and stated | `tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent`, and the live log line below | green, 26.1 s from zero replicas |
 
 ## Resume, and the test that proves it
 
@@ -348,6 +349,8 @@ A pending `lighthouse` check that no self hosted worker claims within `CHECK_CLA
 
 The crawl follows same origin links breadth first to depth 3 and 200 pages, with a 10 second timeout per request, skips what `robots.txt` disallows, and reports only 4xx, 5xx, timeouts and refused connections, keeping the first 50 with the page each was found on. On the machine that runs it, `docker compose -f checks/compose.yml up -d --build` starts the worker with Chromium and `restart: unless-stopped`, reading `API_BASE_URL` and `MERCURY_BEARER_TOKEN` from a gitignored `.env` beside it.
 
+The worker polls once an hour, set by `POLL_SECONDS`. It first polled once a minute, and because Container Apps keeps a replica while requests arrive less than 5 minutes apart, the API held one replica from 2026-09-28 14:25 UTC until the worker was stopped at 04:29 UTC the next day. It reached zero replicas 6 minutes after the last poll.
+
 `tests/test_checks_integration.py` runs in CI's compose job against the stack's own runs page, with the window cut to 20 seconds and PageSpeed pointed at a port where nothing listens, so the fallback records an error as its finding without calling Google. Real Lighthouse runs in the checks container. From CI run 459c206:
 
 ```
@@ -370,6 +373,50 @@ tests/test_scheduler.py::test_schedule_weekly_checks_creates_the_next_once_the_w
 tests/test_scheduler.py::test_schedule_weekly_checks_is_due_per_kind PASSED
 tests/test_scheduler.py::test_schedule_weekly_checks_logs_and_carries_on_when_the_api_refuses PASSED
 ```
+
+## Telegram, and its cold start
+
+The bot is how I reach the service from a phone. Telegram posts each message to `POST /telegram`, which checks the secret token header first and refuses everyone when no secret is configured, then checks the chat id against an allowlist of one. Any other chat gets a 200 and no reply, and its text is not logged. `/status`, `/runs` and `/cancel` are answered in the webhook with no model call. `/cancel` writes the run's `done` event and clears its claim, so a worker still running it fails its next fenced write and stops.
+
+Free text gets an "On it." reply at once and becomes a `chat` run for the worker, which holds the model key, so the webhook never waits on a model. The model sees the task types it may start and the last 20 turns of the chat, and answers with either a run to create or one question. The run it creates takes over the "On it." message and edits it after every step, so a run appears in the chat as one message that changes rather than one message per step. A model that still fails after its retries closes the run, and the message says so. Every update that passes the checks gets a 200 even when the reply fails to send, because Telegram retries anything else and a retried `/cancel` would run twice. The tests stand `tests/telegram_fake.py` in for Telegram's API.
+
+```
+tests/test_telegram_webhook.py::test_a_request_without_the_secret_is_refused[None] PASSED [  4%]
+tests/test_telegram_webhook.py::test_a_request_without_the_secret_is_refused[wrong] PASSED [  8%]
+tests/test_telegram_webhook.py::test_an_unconfigured_secret_refuses_everyone PASSED [ 12%]
+tests/test_telegram_webhook.py::test_another_chat_gets_no_reply_at_all PASSED [ 16%]
+tests/test_telegram_webhook.py::test_an_update_that_is_not_a_text_message_gets_no_reply PASSED [ 20%]
+tests/test_telegram_webhook.py::test_runs_lists_the_latest_runs_newest_first PASSED [ 25%]
+tests/test_telegram_webhook.py::test_runs_with_none_says_so PASSED       [ 29%]
+tests/test_telegram_webhook.py::test_status_reports_each_site_and_the_day PASSED [ 33%]
+tests/test_telegram_webhook.py::test_cancel_closes_an_unfinished_run_and_says_so PASSED [ 37%]
+tests/test_telegram_webhook.py::test_cancel_stops_a_running_worker_at_its_next_write PASSED [ 41%]
+tests/test_telegram_webhook.py::test_cancel_explains_what_it_could_not_do[/cancel-Usage: /cancel <run id or its first 8 characters>] PASSED [ 45%]
+tests/test_telegram_webhook.py::test_cancel_explains_what_it_could_not_do[/cancel abc-Usage: /cancel <run id or its first 8 characters>] PASSED [ 50%]
+tests/test_telegram_webhook.py::test_cancel_explains_what_it_could_not_do[/cancel 00000000-No unfinished run starts with 00000000.] PASSED [ 54%]
+tests/test_telegram_webhook.py::test_cancel_leaves_a_finished_run_alone PASSED [ 58%]
+tests/test_telegram_webhook.py::test_a_failed_reply_still_answers_telegram_with_200 PASSED [ 62%]
+tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent PASSED [ 66%]
+tests/test_progress.py::test_render_shows_each_step_and_never_the_code_or_the_test_output PASSED [ 70%]
+tests/test_progress.py::test_render_summarises_a_lighthouse_and_a_crawl_result PASSED [ 75%]
+tests/test_progress.py::test_a_worker_run_edits_its_one_message_after_every_step PASSED [ 79%]
+tests/test_progress.py::test_a_run_nobody_asked_for_on_telegram_sends_nothing PASSED [ 83%]
+tests/test_progress.py::test_a_refused_run_says_why PASSED               [ 87%]
+tests/test_progress.py::test_a_telegram_failure_does_not_stop_the_run PASSED [ 91%]
+tests/test_progress.py::test_push_progress_with_no_client_does_nothing PASSED [ 95%]
+tests/test_progress.py::test_a_self_hosted_check_result_edits_the_message PASSED [100%]
+============================= 24 passed in 26.44s ==============================
+```
+
+### The cold start, measured
+
+Each answer logs how long after the message was sent it went out, from the `date` Telegram stamps on every message. On the first message after the API has scaled to zero, that figure is the cold start as the sender feels it. On 2026-09-29 the API reached zero replicas at 04:35:39 UTC, and a `/status` sent at 04:36:55 produced this line, exactly as Log Analytics holds it for container `agent-runs-api`:
+
+```
+{"timestamp": "2026-09-29T04:37:21.144435+00:00", "level": "INFO", "logger": "agent_runs.telegram", "message": "answered /status 26.1 s after it was sent", "trace_id": "b330779d14a22534006f78ce355d1a8d", "span_id": "411555a6825960b0"}
+```
+
+Telegram's `date` has whole second resolution, so the true figure lies between 26.1 and 27.1 seconds. The Container Apps system log for the same wake shows where it went. The replica was assigned 2 seconds after the message was sent, the image was pulled by 16 seconds, the container started at 19 seconds, and the reply went at 26. Pulling the image took about 14 of those seconds. A warm `/status` on 2026-09-28 answered in 2.6 seconds, and free text got its "On it." in 2.1 seconds.
 
 ## Observability
 
