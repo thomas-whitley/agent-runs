@@ -15,11 +15,13 @@ from typing import Any
 import psycopg
 from pydantic import ValidationError
 
+from app.approvals import ask
 from app.loop import (
     DEFAULT_MODEL_RETRY_ATTEMPTS,
     DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
     _complete_with_retry,
 )
+from app.mercury_config import RepoConfig
 from app.model import Model
 from app.run_request import RunRequest
 from app.runs import finish_run, record_step
@@ -32,9 +34,10 @@ MAX_TURNS = 20
 MODEL_DOWN = "The model is not answering right now. Try again in a few minutes."
 CANNOT = "I could not work out a task from that. Try again, or use /runs, /status or /cancel."
 NOT_YET = {
-    "repo_chore": "Repo chores are not wired up yet.",
     "digest": "The digest is not wired up yet.",
 }
+WAITING = "That one needs your approval, below."
+NO_REPOS = "No repos are listed for chores in mercury.yaml."
 # The types a message may start. chat itself is not one of them.
 CREATABLE = ("pytest", "site_check")
 
@@ -46,7 +49,8 @@ Task types you may start:
 - pytest: inputs.task is a complete pytest file. The agent writes solution.py until it passes.
 - site_check: inputs.task is a URL. inputs.kind is uptime, lighthouse or broken_links; \
 uptime when the message does not say.
-- repo_chore: inputs.task is an instruction and inputs.repo is owner/name. Not available yet.
+- repo_chore: inputs.task is an instruction and inputs.repo is owner/name, one of the \
+repos listed with the message. It opens a pull request after the owner approves it.
 - digest: a summary of the last day. Not available yet.
 
 To start a task: {"action": "create", "type": "<type>", "inputs": {...}}
@@ -69,12 +73,28 @@ _CREATE = """
 INSERT INTO runs (task, type, provider, check_kind, telegram_chat_id, telegram_message_id)
 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
 """
+# A chore waits where no worker claims it, on the question's message, so
+# its progress replaces the question once it is approved.
+_CREATE_CHORE = """
+INSERT INTO runs (task, type, provider, repo, status, telegram_chat_id)
+VALUES (%s, 'repo_chore', %s, %s, 'awaiting_approval', %s) RETURNING id
+"""
+_SET_MESSAGE_FROM_APPROVAL = """
+UPDATE runs SET telegram_message_id = (SELECT message_id FROM approvals WHERE id = %s)
+WHERE id = %s
+"""
 
 
-def _prompt(history: list[tuple[str, str]], message: str) -> str:
+def _prompt(
+    history: list[tuple[str, str]], message: str, repos: tuple[RepoConfig, ...] = ()
+) -> str:
     lines = [f"{role.capitalize()}: {text}" for role, text in history]
     earlier = "\n".join(lines) if lines else "(none)"
-    return f"Conversation so far, oldest first:\n{earlier}\n\nNew message:\n{message}"
+    names = ", ".join(repo.name for repo in repos) or "(none)"
+    return (
+        f"Repos a repo_chore may touch: {names}\n\n"
+        f"Conversation so far, oldest first:\n{earlier}\n\nNew message:\n{message}"
+    )
 
 
 def _parse(text: str) -> dict[str, Any] | None:
@@ -88,11 +108,20 @@ def _parse(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _create(conn, intent: dict, chat_id: int, message_id: int) -> tuple[str | None, str]:
+def _create(
+    conn,
+    intent: dict,
+    chat_id: int,
+    message_id: int,
+    repos: tuple[RepoConfig, ...] = (),
+    telegram: TelegramClient | None = None,
+) -> tuple[str | None, str]:
     """Create the run the model picked. Returns its id and the reply to show."""
     type_ = intent.get("type")
     if type_ in NOT_YET:
         return None, NOT_YET[type_]
+    if type_ == "repo_chore":
+        return _create_chore(conn, intent.get("inputs") or {}, chat_id, repos, telegram)
     if type_ not in CREATABLE:
         return None, CANNOT
     try:
@@ -113,12 +142,54 @@ def _create(conn, intent: dict, chat_id: int, message_id: int) -> tuple[str | No
     return str(run_id), f"Started a {run.type} run, {str(run_id)[:8]}."
 
 
+def _create_chore(
+    conn,
+    inputs: dict,
+    chat_id: int,
+    repos: tuple[RepoConfig, ...],
+    telegram: TelegramClient | None,
+) -> tuple[str | None, str]:
+    """A chore is created waiting and asked about, per docs/mercury.md: it
+    echoes the repo and the instruction and starts on a button press only."""
+    instruction, name = inputs.get("task"), inputs.get("repo")
+    if not isinstance(instruction, str) or not instruction.strip():
+        return None, CANNOT
+    if not repos:
+        return None, NO_REPOS
+    repo = next((repo for repo in repos if repo.name == name), None)
+    if repo is None:
+        return None, "I can only work on " + ", ".join(r.name for r in repos) + "."
+    if not repo.test_command:
+        return None, f"{repo.name} has no test_command in mercury.yaml, so it cannot have a chore."
+    if telegram is None:
+        return None, CANNOT
+    instruction = instruction.strip()
+    question = (
+        f"Repo chore on {repo.name}:\n{instruction}\n\n"
+        f"It runs `{repo.test_command}` and opens a pull request only if that passes."
+    )
+    try:
+        # One transaction, so a question that could not be sent leaves no
+        # run waiting on an answer nobody can give.
+        with conn.transaction():
+            run_id = conn.execute(
+                _CREATE_CHORE, (instruction, TASK_TYPES["repo_chore"].provider, repo.name, chat_id)
+            ).fetchone()[0]
+            approval_id = ask(conn, telegram, chat_id, "start_run", question, run_id=str(run_id))
+            conn.execute(_SET_MESSAGE_FROM_APPROVAL, (approval_id, run_id))
+    except TelegramError as error:
+        logger.error("could not ask about a repo chore: %s", error)
+        return None, "I could not send the approval question, so nothing was started."
+    return str(run_id), WAITING
+
+
 def run_chat(
     conn: psycopg.Connection,
     run_id: str,
     model: Model,
     telegram: TelegramClient | None,
     worker_id: str | None = None,
+    repos: tuple[RepoConfig, ...] = (),
     retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
 ) -> int:
@@ -133,7 +204,7 @@ def run_chat(
     # waits, which fits inside the lease this run does not heartbeat during.
     try:
         reply = _complete_with_retry(
-            model, SYSTEM, _prompt(history, message), retry_attempts, retry_backoff_seconds
+            model, SYSTEM, _prompt(history, message, repos), retry_attempts, retry_backoff_seconds
         )
     except RuntimeError as error:
         # Closed rather than left running, or the worker would take it again
@@ -147,7 +218,7 @@ def run_chat(
 
     created: str | None = None
     if intent.get("action") == "create":
-        created, answer = _create(conn, intent, chat_id, message_id)
+        created, answer = _create(conn, intent, chat_id, message_id, repos, telegram)
     elif intent.get("action") == "ask" and isinstance(intent.get("question"), str):
         answer = intent["question"].strip() or CANNOT
     else:

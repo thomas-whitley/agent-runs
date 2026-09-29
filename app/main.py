@@ -76,6 +76,10 @@ def create_app() -> FastAPI:
         task_type = TASK_TYPES[run.type]
         if not task_type.public:
             require_bearer_token(request)
+        if run.type == "repo_chore":
+            # A chore waits for a button press in Telegram (app/chat.py), and
+            # this endpoint has no way to ask, so it cannot start one.
+            raise HTTPException(status_code=422, detail="a repo_chore starts from Telegram")
         trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(

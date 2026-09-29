@@ -138,7 +138,7 @@ def test_the_chat_run_closes_with_its_tokens_and_a_done_event(bot, fake_telegram
 @pytest.mark.parametrize(
     "reply, expected",
     [
-        (create("repo_chore", task="bump deps"), "Repo chores are not wired up yet."),
+        (create("repo_chore", task="bump deps", repo="o/r"), "No repos are listed for chores"),
         (create("digest", task="today"), "The digest is not wired up yet."),
         (create("chat", task="hi"), "I could not work out a task from that."),
         (create("pytest", task="  "), "I could not work out a task from that."),

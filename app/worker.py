@@ -21,7 +21,7 @@ from app.config import (
 from app.corpus import load_corpus
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
-from app.mercury_config import load_mercury_config
+from app.mercury_config import MercuryConfig, RepoConfig, load_mercury_config
 from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.pagespeed import run_pagespeed
@@ -193,6 +193,7 @@ def process_run(
     model_builder: Callable[[Settings, str], Model] = build_model,
     check_runner: Callable[[str, str | None], dict[str, Any]] = run_pagespeed,
     owner_chat_id: int | None = None,
+    repos: tuple[RepoConfig, ...] = (),
 ) -> LoopResult | None:
     """Execute one claimed run. None means it was refused rather than run.
 
@@ -215,6 +216,7 @@ def process_run(
             check_runner,
             telegram,
             owner_chat_id,
+            repos,
         )
         if result is not None and result.status == "budget_exhausted":
             _tell_owner(
@@ -242,6 +244,7 @@ def _process_run(
     check_runner: Callable[[str, str | None], dict[str, Any]],
     telegram: TelegramClient | None,
     owner_chat_id: int | None,
+    repos: tuple[RepoConfig, ...],
 ) -> LoopResult | None:
     # A check makes no model call, so the daily limit that protects the key
     # does not apply to it.
@@ -292,7 +295,7 @@ def _process_run(
         return None
 
     if task_type_name == "chat":
-        tokens = run_chat(conn, run_id, model, telegram, worker_id=settings.worker_id)
+        tokens = run_chat(conn, run_id, model, telegram, worker_id=settings.worker_id, repos=repos)
         return LoopResult(status="succeeded", attempts=1, tokens_used=tokens)
 
     return run_agent_loop(
@@ -348,11 +351,13 @@ def main() -> None:  # pragma: no cover - the process entry point
     configure_telemetry()
     retriever = build_retriever(settings)
     models: dict[str, Model] = {}
-    # The owner's chat, told when a cap stops a run. No config, no message.
+    # The owner's chat, told when a cap stops a run, and the repos a chore
+    # may touch. No config, no message and no chores.
     try:
-        owner_chat_id = load_mercury_config(settings.mercury_config_path).telegram_chat_id
+        mercury = load_mercury_config(settings.mercury_config_path)
     except FileNotFoundError:
-        owner_chat_id = None
+        mercury = MercuryConfig(sites=())
+    owner_chat_id = mercury.telegram_chat_id
 
     def cached_model_builder(settings: Settings, provider_name: str) -> Model:
         """One client per provider, built the first time a run needs it."""
@@ -395,6 +400,7 @@ def main() -> None:  # pragma: no cover - the process entry point
                     retriever,
                     model_builder=cached_model_builder,
                     owner_chat_id=owner_chat_id,
+                    repos=mercury.repos,
                 )
             except Exception:
                 # run_agent_loop already closes a run it could not finish. This

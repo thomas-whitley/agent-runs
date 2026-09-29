@@ -41,9 +41,11 @@ budgets:
   per_month_usd: 5
 
 portfolio:
-  repos:
-    - owner/repo-one
-    - owner/repo-two
+  repos:                # a repo_chore may touch only these, and only one with a test_command
+    - name: owner/repo-one
+      test_command: uv run pytest
+    - name: owner/repo-two
+      test_command: npm ci && npm test
   sites:                # uptime, hourly, plain HTTP from the scheduler Job
     - https://example.com
   pages:                # Lighthouse and the broken link crawl, weekly, on the self hosted worker
