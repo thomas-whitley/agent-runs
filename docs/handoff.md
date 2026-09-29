@@ -1,4 +1,4 @@
-# Handoff: step 2d done and claim seven green, runs page live, next is step 3 (2026-09-28, ~22:45 Melbourne)
+# Handoff: step 3 done, Telegram live and cold start stated, next is step 4 (2026-09-29, ~14:45 Melbourne)
 
 ## Where things stand
 
@@ -33,6 +33,61 @@ Suggested 2d order, one commit each, test first: the claim window on the Python
 side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links`
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
+
+## Step 3 is done (2026-09-29)
+
+The Telegram bot is live as @tw_mercury_bot, and README claim "The webhook cold
+start is measured and stated" is green at 26.1 s from zero replicas, with the live
+log line pasted under it. **The next step is 4, approvals and repo chores**, then
+5, 6c and 6d in the brief's order. Step 4 needs the public fixture repo
+`thomas-whitley/mercury-fixture` (brief, setup item 4), which does not exist yet as
+far as this session knows.
+
+- **Commits.** 3a `3cf5cfa`, 3b `52c9b99`, 3c `efa37a6`, 3d `aa55bd4`, 3e `903d86c`,
+  the chat retry fix `1904bfc`, the poll interval `024c94c`, the README `75d0618`.
+  The commit messages carry the reasoning.
+- **The webhook** is `app/telegram_webhook.py`. Secret header first, failing closed
+  with no secret configured, then an allowlist of one chat id from `mercury.yaml`.
+  `/status`, `/runs` and `/cancel` are answered there with no model call. Free text
+  gets "On it." and becomes a `chat` run for the worker (`app/chat.py`), which keeps
+  the last 20 turns per chat in `telegram_turns`. `/cancel` clears `claimed_by`, so a
+  running worker's next fenced write fails and it stops.
+- **Progress** is one message per run, edited after every step (`tests/test_progress.py`).
+- **Budget caps** (3d, claim four) end a run with one `done` event whose status is
+  `budget`, not a new event kind. Haiku is costed at 5 USD per million on every
+  token as an upper bound.
+- **The cold start.** The api reached zero replicas at 04:35:39 UTC on 2026-09-29,
+  and `/status` sent at 04:36:55 was answered 26.1 s later (Telegram's `date` is
+  whole seconds, so 26.1 to 27.1). System log: replica assigned at +2 s, image
+  pulled by +16 s, container started at +19 s, one failed startup probe, reply at
+  +26 s. The image pull is about 14 s of it, so a smaller image is the lever if the
+  figure ever matters. Warm figures from 2026-09-28 are 2.6 s for `/status` and
+  2.1 s for "On it.".
+- **Why the api stopped scaling to zero.** The self hosted checks worker polled
+  `POST /checks/claim` every 60 s, and Container Apps keeps a replica while requests
+  arrive under 5 minutes apart. One replica ran from 2026-09-28 14:25 UTC to
+  2026-09-29 04:34 UTC. `POLL_SECONDS` now defaults to 3600 (`024c94c`). Telegram
+  itself had 0 pending updates and no delivery errors.
+- **The worker is stopped.** It was stopped at 04:29 UTC for the measurement. The
+  image is rebuilt with the new default. Start it again with
+  `docker compose -f checks/compose.yml up -d --build` unless the user has already.
+- **Free text fails while Gemini's free tier returns 503.** That is on Google's
+  side, and the chat run closes and says so. Whether to fall back to Haiku is the
+  user's call and is not made. The recommendation was to wait it out.
+  `ANTHROPIC_API_KEY` is not deployed and the Bicep has no param for it, and Haiku
+  costs money, so it needs the user's yes.
+- **Deploying Telegram.** The private workflow passes `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_WEBHOOK_SECRET` from that repo's secrets, and `telegram.chat_id` is in
+  its `mercury.yaml`. The webhook was registered with
+  `scripts/register-telegram-webhook.sh <api url>`, which reads both values from
+  `.env`. `getUpdates` returns nothing while the webhook is set. The private repo's
+  `PUBLIC_SHA` is `1904bfc`, and `024c94c` and `75d0618` change nothing the api runs,
+  so no redeploy is needed for them.
+- **Reading the timing line.** `Log_s has "answered"` on `ContainerAppConsoleLogs_CL`
+  for `agent-runs-api`, with the query pattern under "Azure specifics" below. Startup
+  events are in `ContainerAppSystemLogs_CL`, column `Reason_s`.
+- **npm** is now installed on this Linux machine (Ubuntu's `npm` 9.2.0 beside
+  `nodejs` 22.22.1), so `cd checks && npm ci && npm test` runs locally. 43 tests pass.
 
 ## Step 2d is done (2026-09-28)
 
