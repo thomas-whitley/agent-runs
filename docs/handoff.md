@@ -1,4 +1,4 @@
-# Handoff: step 4a to 4d done, 4e waits on the fixture repo and token (2026-09-30)
+# Handoff: step 4 done, step 5 is next (2026-09-30)
 
 ## Where things stand
 
@@ -75,10 +75,19 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
   sandbox and fixed it in `7693fc8` with a separate `sandbox` user, so a posted
   test file cannot reach a chore's checkout. `app/sandbox.py` has its own copies of
   the two helpers rather than a shared module.
-- **4e needs the user.** Setup items 3 and 4 of the brief: `thomas-whitley/mercury-fixture`
-  (public, one passing test, branch protection on `main`) and `MERCURY_GITHUB_TOKEN`
-  in `.env` and the private repo's secrets. Then the integration test marked
-  `integration`, and the README row.
+- **4e is done (2026-09-30).** `thomas-whitley/mercury-fixture` is public, stdlib
+  only (`python -m unittest -v`, so a chore installs nothing into the no-dev image),
+  with `main` protected by a PR rule at 0 approvals and `enforce_admins` off. The
+  fine grained `MERCURY_GITHUB_TOKEN` is in `.env` and in `mercury-config`'s secrets,
+  and can push to the fixture and `agent-runs` but not see `mercury-config`.
+  `tests/test_repo_chore_github.py` drives webhook, chat, Approve and worker against
+  the real fixture with the stub model, and closes its PR and branch in teardown.
+  It skips without the token, so CI skips it. README row green with PR 2 as the
+  record. From Git Bash, run WSL scripts with `MSYS_NO_PATHCONV=1`, or `/mnt/c`
+  paths get rewritten and `$(...)` inside `bash -lc '...'` came back empty.
+- **Still owed from 4e.** Add the fixture to `mercury-config`'s `mercury.yaml` with
+  `test_command: python -m unittest -v`, add the `MERCURY_GITHUB_TOKEN` line to the
+  private workflow, then bump `PUBLIC_SHA` and remeasure the cold start.
 - **A second session shared this working copy on 2026-09-30.** It was making
   `pytest` runs require the bearer token and editing README, `docs/mercury.md`,
   the Publish workflow and several tests. Both sessions running pytest at once

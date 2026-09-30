@@ -42,6 +42,7 @@ The API serves a built page from `web/dist` at `/`. It is registered after every
 | A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | `tests/test_checks_integration.py` in CI's compose job, and `tests/test_scheduler.py` for the weekly schedule | green |
 | A budget trip ends a run with one event and one message | `tests/test_budget.py`, against the fake Telegram in `tests/telegram_fake.py` | green |
 | The webhook cold start is measured and stated | `tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent`, and the live log line below | green, 26.1 s from zero replicas |
+| A Telegram message opens a PR on a named repo | `tests/test_repo_chore_github.py`, against the real `thomas-whitley/mercury-fixture` | green when run with a GitHub token, output below. CI has no token, so it skips there |
 
 ## Resume, and the test that proves it
 
@@ -423,6 +424,23 @@ Each answer logs how long after the message was sent it went out, from the `date
 ```
 
 Telegram's `date` has whole second resolution, so the true figure lies between 26.1 and 27.1 seconds. The Container Apps system log for the same wake shows where it went. The replica was assigned 2 seconds after the message was sent, the image was pulled by 16 seconds, the container started at 19 seconds, and the reply went at 26. Pulling the image took about 14 of those seconds. A warm `/status` on 2026-09-28 answered in 2.6 seconds, and free text got its "On it." in 2.1 seconds.
+
+## A pull request from a Telegram message
+
+A message asking for a change to a repo listed in `mercury.yaml` becomes a `repo_chore` that waits for an Approve button. Once approved, the worker clones the repo, branches as `agent/<run id>`, lets the model rewrite whole files, and runs the repo's own `test_command`. The branch is pushed and a pull request opened only when the tests pass. Three red attempts end the run failed with nothing pushed, and the chat offers an Open it anyway button.
+
+`tests/test_repo_chore_github.py` runs that whole path against the real public repo `thomas-whitley/mercury-fixture`, with the stub model and the fake Telegram. The message goes into the webhook, the chat run turns it into a chore, the test presses Approve, and the worker opens a real pull request. The test then checks the pull request on GitHub, and closes it and deletes its branch whatever happened. It needs a token that can push to the fixture, so it is marked `integration` and skips without one.
+
+```
+$ MERCURY_GITHUB_TOKEN=... uv run pytest tests/test_repo_chore_github.py -m integration -o addopts= -v -s
+tests/test_repo_chore_github.py::test_a_telegram_message_opens_a_pull_request_on_the_fixture
+{"timestamp": "2026-09-30T10:49:08.263610+00:00", "level": "INFO", "logger": "agent_runs.repo_chore", "message": "repo chore a645b409-1756-4ba1-ab22-28c8978b5bf3 ended succeeded", ...}
+run a645b409-1756-4ba1-ab22-28c8978b5bf3 opened https://github.com/thomas-whitley/mercury-fixture/pull/2
+PASSED
+============================== 1 passed in 10.76s ==============================
+```
+
+From the Approve press to the chore ending took 5.3 seconds on the first run, covering the clone, the fixture's tests, the push and the two GitHub calls. [Pull request 2](https://github.com/thomas-whitley/mercury-fixture/pull/2) stays on the fixture, closed, as the record.
 
 ## Observability
 
