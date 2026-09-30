@@ -1,7 +1,13 @@
 """The sandbox is a subprocess with a timeout and no network. Nothing more."""
 
+import os
+import pwd
+import subprocess
 import time
 
+import pytest
+
+from app import sandbox
 from app.sandbox import verify
 
 PASSING_TEST = """
@@ -86,3 +92,45 @@ def test_env():
     result = verify("def add(a, b):\n    return a + b\n", reading_env)
 
     assert result.passed is True
+
+
+# In the image the worker is root. A test file running as the worker's user
+# could read the worker's keys from /proc/<pid>/environ, whatever env= says,
+# so as root pytest runs as the unprivileged sandbox user, and with no such
+# user it does not run.
+
+
+def test_as_root_the_test_file_runs_as_the_sandbox_user(monkeypatch):
+    chowned, run_kwargs = [], {}
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        pwd, "getpwnam", lambda name: pwd.struct_passwd((name, "x", 4321, 4321, "", "/", "/bin/sh"))
+    )
+    monkeypatch.setattr(
+        os, "chown", lambda path, uid, gid, **kwargs: chowned.append((os.path.basename(path), uid))
+    )
+
+    def fake_run(args, **kwargs):
+        run_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, stdout="1 passed", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = verify("def add(a, b):\n    return a + b\n", PASSING_TEST)
+
+    assert result.passed is True
+    assert (run_kwargs.get("user"), run_kwargs.get("group")) == (4321, 4321)
+    assert run_kwargs.get("extra_groups") == []
+    assert ("test_solution.py", 4321) in chowned
+
+
+def test_as_root_with_no_sandbox_user_the_test_file_does_not_run(monkeypatch):
+    def no_such_user(name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(pwd, "getpwnam", no_such_user)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("ran as root"))
+
+    with pytest.raises(sandbox.SandboxError, match="sandbox user"):
+        verify("def add(a, b):\n    return a + b\n", PASSING_TEST)

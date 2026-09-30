@@ -11,12 +11,14 @@ FROM python:3.12-slim
 
 # git for repo chores (app/repo_chore.py). Without recommends, so no perl
 # helpers or man pages ride along into an image every cold start pulls. The
-# chore user runs a repo's test command, so it cannot read the root worker's
-# keys through /proc.
+# chore user runs a repo's test command and the sandbox user runs a posted
+# pytest file (app/sandbox.py), so neither can read the root worker's keys
+# through /proc. Two users, so a test file cannot reach a chore's checkout.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --no-create-home --shell /usr/sbin/nologin chore
+    && useradd --system --no-create-home --shell /usr/sbin/nologin chore \
+    && useradd --system --no-create-home --shell /usr/sbin/nologin sandbox
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
 

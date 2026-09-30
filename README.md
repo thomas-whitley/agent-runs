@@ -174,7 +174,9 @@ You post a pytest file with the bearer token. The agent writes the function that
 
 That is a demo guard, not isolation, and the difference matters. The worker container itself has a network, because it calls the model and Postgres. Disabling `socket` and `_socket` stops generated code reaching out by accident, and `tests/test_sandbox.py` asserts that both a plain `socket.create_connection` and a raw `import _socket` fail. It would not stop code written to get out.
 
-The scrubbed environment keeps keys out of the subprocess's own environment and no further. The subprocess runs as the same user as the worker, so code in the posted file can read the worker's environment from `/proc`, database URL and model keys included, and print it into the verify output. That is why posting a pytest run, and reading its events, needs the bearer token. Until 2026-09-30 anyone could do both.
+The scrubbed environment keeps keys out of the subprocess's own environment and no further. A subprocess running as the worker's user can still read the worker's environment from `/proc`, database URL and model keys included, and print it into the verify output. In the image the worker is root, so pytest runs as a separate `sandbox` user instead, and a worker that is root with no such user refuses to run the file at all. Checked in the built image on 2026-09-30 with a fake key in the worker's environment, a posted test that reads `/proc/1/environ` ran as uid 998 and got `PermissionError`. The same test against the previous image ran as uid 0 and printed the key.
+
+The sandbox user closes that one path. The file still runs with the container's network, so posting a pytest run, and reading its events, needs the bearer token. Until 2026-09-30 anyone could do both.
 
 The subprocess starts with the socket module replaced, so the code under verification cannot open a connection. `tests/test_sandbox.py` asserts that a test which calls `socket.create_connection` fails, that a solution which loops forever is killed at the timeout, and that a wrong answer comes back with pytest's output rather than an exception.
 
