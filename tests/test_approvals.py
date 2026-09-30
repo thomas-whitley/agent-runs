@@ -310,3 +310,45 @@ def test_the_third_failure_sends_one_message_with_a_resume_button(
     assert button["text"] == "Resume"
     row = migrated_db.execute("SELECT action, schedule_name FROM approvals").fetchone()
     assert row == ("resume_schedule", f"site_uptime:{unreachable}")
+
+
+def test_pressing_open_anyway_creates_a_run_from_the_failed_one(bot, fake_telegram, migrated_db):
+    failed = str(
+        migrated_db.execute(
+            "INSERT INTO runs (task, type, repo, status, finished_at) "
+            "VALUES ('Add subtract', 'repo_chore', 'o/r', 'failed', now()) RETURNING id"
+        ).fetchone()[0]
+    )
+    approval_id = ask(
+        migrated_db, client(fake_telegram), CHAT, "open_anyway", "Tests failed.", run_id=failed
+    )
+
+    press(bot, approval_id, "yes")
+
+    row = migrated_db.execute(
+        "SELECT task, repo, status, source_run_id, telegram_chat_id, telegram_message_id "
+        "FROM runs WHERE source_run_id IS NOT NULL"
+    ).fetchone()
+    assert row[:3] == ("Add subtract", "o/r", "pending")
+    assert str(row[3]) == failed
+    assert row[4:] == (CHAT, 1)
+    assert migrated_db.execute("SELECT status FROM runs WHERE id = %s", (failed,)).fetchone() == (
+        "failed",
+    )
+
+
+def test_declining_open_anyway_creates_nothing(bot, fake_telegram, migrated_db):
+    failed = str(
+        migrated_db.execute(
+            "INSERT INTO runs (task, type, repo, status, finished_at) "
+            "VALUES ('Add subtract', 'repo_chore', 'o/r', 'failed', now()) RETURNING id"
+        ).fetchone()[0]
+    )
+    approval_id = ask(
+        migrated_db, client(fake_telegram), CHAT, "open_anyway", "Tests failed.", run_id=failed
+    )
+
+    press(bot, approval_id, "no")
+
+    assert migrated_db.execute("SELECT count(*) FROM runs").fetchone() == (1,)
+    assert approval(migrated_db, approval_id) == ("declined", True)

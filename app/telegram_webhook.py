@@ -270,6 +270,8 @@ async def _on_button(request: Request, callback: dict) -> None:
                 await conn.execute(approvals.ANSWER, ("approved", approval_id))
                 if action == "start_run":
                     await conn.execute(approvals.RELEASE_RUN, (run_id,))
+                elif action == "open_anyway":
+                    await conn.execute(approvals.OPEN_ANYWAY, (chat_id, message_id, run_id))
                 else:
                     await conn.execute(RESUME, (schedule_name,))
             else:

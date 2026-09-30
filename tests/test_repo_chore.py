@@ -10,6 +10,7 @@ worker got that far before it died, so the chore picks up from there.
 
 import json
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -363,3 +364,111 @@ def test_the_worker_refuses_a_chore_whose_repo_left_the_config(
     status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (run_id,)).fetchone()
     assert status == ("refused",)
     assert remote_branches(remote) == ["main"]
+
+
+# Open it anyway: a failed chore offers a button, and pressing it creates a
+# run that reapplies the failed diff and opens the pull request regardless.
+
+CHAT = 42
+
+
+def failed_chore(conn, remote, github, tmp_path) -> str:
+    run_id = chore_run(conn)
+    model = StubModel(replies=[pick("calc.py"), change(BAD_CALC)])
+    assert (
+        run_repo_chore(conn, run_id, model, setup(tmp_path, github), worker_id=WORKER).status
+        == "failed"
+    )
+    return run_id
+
+
+def anyway_run(conn, source_run_id: str) -> str:
+    run_id = str(
+        conn.execute(
+            "INSERT INTO runs (task, type, repo, source_run_id) "
+            "SELECT task, 'repo_chore', repo, id FROM runs WHERE id = %s RETURNING id",
+            (source_run_id,),
+        ).fetchone()[0]
+    )
+    assert claim_run(conn, run_id, WORKER)
+    return run_id
+
+
+def test_open_anyway_pushes_the_failed_diff_and_says_the_tests_failed(
+    migrated_db, remote, github, tmp_path
+):
+    failed = failed_chore(migrated_db, remote, github, tmp_path)
+    run_id = anyway_run(migrated_db, failed)
+    model = StubModel(replies=["never read"])
+
+    result = run_repo_chore(migrated_db, run_id, model, setup(tmp_path, github), worker_id=WORKER)
+
+    assert result.status == "succeeded"
+    assert model.prompts == []
+    branch = f"agent/{run_id}"
+    assert "return a + b" in git("show", f"{branch}:calc.py", cwd=remote)
+    assert "test_subtract.py" in git("ls-tree", "--name-only", branch, cwd=remote).split()
+    [pull] = github.pulls
+    assert pull["head"] == branch
+    assert "failed" in pull["body"]
+    assert failed in pull["body"]
+    assert kinds(migrated_db, run_id) == ["clone", "apply", "push", "pr", "done"]
+
+
+def test_a_failed_chore_from_telegram_offers_open_anyway(
+    migrated_db, clean_db, remote, github, fake_telegram, tmp_path, monkeypatch
+):
+    from app.worker import process_run
+
+    tmp_path.joinpath(".db-url").write_text(clean_db)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("TELEGRAM_API_URL", fake_telegram.url)
+    settings = worker_settings(tmp_path, github, monkeypatch)
+    run_id = chore_run(migrated_db)
+    migrated_db.execute(
+        "UPDATE runs SET telegram_chat_id = %s, telegram_message_id = 7 WHERE id = %s",
+        (CHAT, run_id),
+    )
+    model = StubModel(replies=[pick("calc.py"), change(BAD_CALC)])
+
+    process_run(
+        migrated_db,
+        run_id,
+        settings,
+        model_builder=lambda settings, provider: model,
+        repos=(RepoConfig(name=REPO, test_command=TEST_COMMAND),),
+    )
+
+    [question] = fake_telegram.sent()
+    [[button, _]] = question["reply_markup"]["inline_keyboard"]
+    assert button["text"] == "Open it anyway"
+    row = migrated_db.execute("SELECT action, run_id FROM approvals").fetchone()
+    assert row == ("open_anyway", uuid.UUID(run_id))
+
+
+def test_a_succeeded_chore_offers_nothing(
+    migrated_db, clean_db, remote, github, fake_telegram, tmp_path, monkeypatch
+):
+    from app.worker import process_run
+
+    tmp_path.joinpath(".db-url").write_text(clean_db)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("TELEGRAM_API_URL", fake_telegram.url)
+    settings = worker_settings(tmp_path, github, monkeypatch)
+    run_id = chore_run(migrated_db)
+    migrated_db.execute(
+        "UPDATE runs SET telegram_chat_id = %s, telegram_message_id = 7 WHERE id = %s",
+        (CHAT, run_id),
+    )
+    model = StubModel(replies=[pick("calc.py"), change(GOOD_CALC)])
+
+    process_run(
+        migrated_db,
+        run_id,
+        settings,
+        model_builder=lambda settings, provider: model,
+        repos=(RepoConfig(name=REPO, test_command=TEST_COMMAND),),
+    )
+
+    assert fake_telegram.sent() == []
+    assert migrated_db.execute("SELECT count(*) FROM approvals").fetchone() == (0,)

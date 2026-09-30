@@ -134,9 +134,16 @@ def run_repo_chore(
     retry_attempts: int = DEFAULT_MODEL_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
 ) -> LoopResult:
-    instruction, tokens_used = conn.execute(
-        "SELECT task, tokens_used FROM runs WHERE id = %s", (run_id,)
+    instruction, tokens_used, source_run_id = conn.execute(
+        "SELECT task, tokens_used, source_run_id FROM runs WHERE id = %s", (run_id,)
     ).fetchone()
+    # Open it anyway: the diff of the failed run this one was created from.
+    source = None
+    if source_run_id is not None:
+        row = conn.execute(
+            "SELECT output FROM steps WHERE run_id = %s AND kind = 'done'", (source_run_id,)
+        ).fetchone()
+        source = (str(source_run_id), (row[0] or {}).get("diff", "") if row else "")
     # A takeover continues the step numbering rather than colliding with it.
     seq = conn.execute(
         "SELECT coalesce(max(seq), 0) FROM steps WHERE run_id = %s", (run_id,)
@@ -172,6 +179,8 @@ def run_repo_chore(
     keepalive = _Keepalive(setup.heartbeat_database_url, run_id, worker_id)
     try:
         with keepalive:
+            if source is not None:
+                return _open_anyway(setup, run_id, instruction, workdir, write, close, source)
             return _run(setup, run_id, instruction, workdir, write, close, ask, state, token_budget)
     except LostLease:
         logger.warning("repo chore %s: lease lost, stopping", run_id, extra=fields)
@@ -291,12 +300,54 @@ def _run(setup, run_id, instruction, workdir, write, close, ask, state, token_bu
     return _open_pull(setup, run_id, instruction, branch, base, write, close)
 
 
-def _open_pull(setup, run_id, instruction, branch, base, write, close) -> LoopResult:
+def _open_anyway(setup, run_id, instruction, workdir, write, close, source) -> LoopResult:
+    """Reapply the failed run's diff on this run's own branch and open the
+    pull request, saying plainly that the tests failed. No model call."""
+    source_run_id, diff = source
+    git = _Git(workdir, setup)
+    branch = f"agent/{run_id}"
+    url = f"{setup.clone_base.rstrip('/')}/{setup.repo.name}.git"
+    base = git.default_branch(url)
+    clone = workdir / "repo"
+    note = (
+        f"`{setup.repo.test_command}` failed on this change in Mercury run `{source_run_id}`. "
+        "It was opened anyway on request, from that run's diff."
+    )
+
+    if git.remote_has_branch(url, branch):
+        git.run("clone", "-q", "--branch", branch, url, str(clone), cwd=workdir)
+        write("clone", {"resumed": True, "base": base})
+        return _open_pull(setup, run_id, instruction, branch, base, write, close, note)
+
+    if not diff.strip():
+        raise ChoreError(f"run {source_run_id} left no diff to open")
+    git.run("clone", "-q", url, str(clone), cwd=workdir)
+    git.run("checkout", "-q", "-b", branch, cwd=clone)
+    write("clone", {"resumed": False, "base": base})
+    patch = workdir / "change.diff"
+    patch.write_text(diff if diff.endswith("\n") else diff + "\n")
+    try:
+        git.run("apply", "--index", str(patch), cwd=clone)
+    except ChoreError:
+        raise ChoreError(f"the diff from run {source_run_id} no longer applies") from None
+    files = git.run("diff", "--cached", "--name-only", cwd=clone).splitlines()
+    write("apply", {"source_run": source_run_id, "files": files})
+    git.run(
+        "-c", f"user.name={AUTHOR[0]}", "-c", f"user.email={AUTHOR[1]}",
+        "commit", "-q", "-m", _title(instruction), cwd=clone,
+    )  # fmt: skip
+    git.run("push", "-q", "origin", branch, cwd=clone, remote=True)
+    write("push", {"branch": branch})
+    return _open_pull(setup, run_id, instruction, branch, base, write, close, note)
+
+
+def _open_pull(setup, run_id, instruction, branch, base, write, close, note=None) -> LoopResult:
     url = setup.github.find_pull(setup.repo.name, branch)
     if url is None:
+        note = note or f"`{setup.repo.test_command}` passed."
         body = (
-            f"{instruction}\n\nOpened by Mercury run `{run_id}` after "
-            f"`{setup.repo.test_command}` passed. It is never merged by the runner."
+            f"{instruction}\n\nOpened by Mercury run `{run_id}`. {note} "
+            "It is never merged by the runner."
         )
         url = setup.github.open_pull(setup.repo.name, branch, base, _title(instruction), body)
     write("pr", {"url": url})

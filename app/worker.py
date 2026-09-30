@@ -9,6 +9,7 @@ from typing import Any
 import psycopg
 from opentelemetry import trace
 
+from app.approvals import ask
 from app.budget import BudgetTrip, check_budget
 from app.chat import run_chat
 from app.config import (
@@ -339,7 +340,7 @@ def _run_chore(
         test_timeout_seconds=settings.repo_test_timeout_seconds,
         heartbeat_database_url=settings.database_url,
     )
-    return run_repo_chore(
+    result = run_repo_chore(
         conn,
         run_id,
         model,
@@ -348,6 +349,29 @@ def _run_chore(
         token_budget=token_budget,
         on_step=lambda: _step_landed(conn, run_id, settings.worker_id, telegram),
     )
+    if result.status == "failed":
+        _offer_open_anyway(conn, run_id, telegram)
+    return result
+
+
+def _offer_open_anyway(
+    conn: psycopg.Connection, run_id: str, telegram: TelegramClient | None
+) -> None:
+    """A chore asked for from Telegram that ended red offers one button that
+    opens the pull request regardless, per docs/mercury.md."""
+    chat_id, repo = conn.execute(
+        "SELECT telegram_chat_id, repo FROM runs WHERE id = %s", (run_id,)
+    ).fetchone()
+    if telegram is None or chat_id is None:
+        return
+    text = (
+        f"The chore on {repo} ({run_id[:8]}) still failed its tests after 3 attempts, "
+        "so no pull request was opened."
+    )
+    try:
+        ask(conn, telegram, chat_id, "open_anyway", text, run_id=run_id)
+    except TelegramError as error:
+        logger.error("could not offer open it anyway: %s", error, extra={"run_id": run_id})
 
 
 def end_on_budget(conn: psycopg.Connection, run_id: str, trip: BudgetTrip) -> None:

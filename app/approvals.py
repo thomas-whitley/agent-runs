@@ -17,8 +17,16 @@ from app.telegram import TelegramClient, TelegramError
 logger = logging.getLogger("agent_runs.approvals")
 
 EXPIRED_NOTE = "Expired after 24 hours with no answer."
-APPROVED_NOTE = {"start_run": "Approved. Starting.", "resume_schedule": "Resumed."}
-DECLINED_NOTE = {"start_run": "Declined. Cancelled.", "resume_schedule": "Left suspended."}
+APPROVED_NOTE = {
+    "start_run": "Approved. Starting.",
+    "resume_schedule": "Resumed.",
+    "open_anyway": "Opening it anyway.",
+}
+DECLINED_NOTE = {
+    "start_run": "Declined. Cancelled.",
+    "resume_schedule": "Left suspended.",
+    "open_anyway": "Left closed.",
+}
 
 _INSERT = """
 INSERT INTO approvals (action, run_id, schedule_name, chat_id, text)
@@ -34,6 +42,12 @@ FROM approvals WHERE id = %s FOR UPDATE
 """
 ANSWER = "UPDATE approvals SET answer = %s, answered_at = now() WHERE id = %s"
 RELEASE_RUN = "UPDATE runs SET status = 'pending' WHERE id = %s AND status = 'awaiting_approval'"
+# A new chore carrying the failed one's diff, reporting on the button's message.
+OPEN_ANYWAY = """
+INSERT INTO runs (task, type, provider, repo, source_run_id, telegram_chat_id, telegram_message_id)
+SELECT task, 'repo_chore', provider, repo, id, %s, %s FROM runs WHERE id = %s
+RETURNING id
+"""
 
 _EXPIRE_DUE = """
 UPDATE approvals SET answer = 'expired', answered_at = now()
@@ -44,10 +58,13 @@ RETURNING action, run_id, chat_id, message_id, text
 
 def buttons(approval_id: int, action: str) -> list[tuple[str, str]]:
     yes = ("Approve", f"approval:{approval_id}:yes")
+    no = f"approval:{approval_id}:no"
     if action == "resume_schedule":
         # Declining a resume changes nothing, so it gets no button.
         return [("Resume", yes[1])]
-    return [yes, ("Decline", f"approval:{approval_id}:no")]
+    if action == "open_anyway":
+        return [("Open it anyway", yes[1]), ("Leave it", no)]
+    return [yes, ("Decline", no)]
 
 
 def ask(

@@ -62,6 +62,8 @@ def _step_line(seq: int, kind: str, output: dict[str, Any] | None) -> str:
         text = f"attempt {output.get('attempt')} {changed}"
     elif kind == "test":
         text = "tests passed" if output.get("passed") else "tests failed"
+    elif kind == "apply":
+        text = f"reapplied the diff from {str(output.get('source_run'))[:8]}"
     elif kind == "push":
         text = f"pushed {output.get('branch')}"
     elif kind == "pr":
