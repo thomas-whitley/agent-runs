@@ -1,4 +1,4 @@
-# Handoff: step 3 done, Telegram live and cold start stated, next is step 4 (2026-09-29, ~14:45 Melbourne)
+# Handoff: step 4a to 4d done, 4e waits on the fixture repo and token (2026-09-30)
 
 ## Where things stand
 
@@ -33,6 +33,50 @@ Suggested 2d order, one commit each, test first: the claim window on the Python
 side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links`
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
+
+## Step 4a to 4d are done (2026-09-30), 4e is next
+
+Local commits `ba23efd` (4a), `9faaf18` (4b), `93eea9d` (4c), `27e152c` (git in the
+image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass and
+6 integration tests skip.
+
+- **4a, approvals.** `app/approvals.py` and migration 009. One row per question,
+  callback data `approval:<id>:yes|no`, answered once under `FOR UPDATE`, 24 hour
+  expiry run by the hourly scheduler Job (`expire_due`). Actions are `start_run`,
+  `resume_schedule` and `open_anyway`. A site's third failure now sends one message
+  with a Resume button, and `/resume <site>` works. Both were promised in 2a.
+- **4b, chore from chat.** Repos come from `portfolio.repos` in `mercury.yaml` as
+  `{name, test_command}`. A chore is created `awaiting_approval`, which the worker
+  never claims, and its progress lands on the question's message. `POST /runs`
+  refuses `repo_chore` with 422.
+- **4c, the executor.** `app/repo_chore.py`. The user chose whole file edits with 3
+  attempts, a test command per repo, and a scrubbed environment subprocess (PATH,
+  throwaway HOME, locale, `PYTHONDONTWRITEBYTECODE=1`) with a 600 s timeout. The
+  branch is pushed only after green, so a branch on the remote means a takeover and
+  the model is skipped. The token reaches git as `http.extraheader` through
+  `GIT_CONFIG_*` env vars, never a file or URL. A background heartbeat on a second
+  connection keeps the lease through a slow test run.
+- **git in the image** adds 35 MB compressed (132 to 167 MB). The user chose one
+  image, so **the README's 26.1 s cold start must be remeasured after the next
+  deploy** (method under step 3 above).
+- **The deploy.** `mercuryGithubToken` is a new Bicep param, worker only.
+  `config/private-repo/deploy.yml` passes `MERCURY_GITHUB_TOKEN`, and **the private
+  repo's copy needs the same line** before the next `PUBLIC_SHA` bump.
+- **4d, open it anyway.** A failed chore from Telegram offers Open it anyway. The
+  new run carries `source_run_id` (migration 011), reapplies the stored diff with no
+  model call, and says in the PR body that the tests failed. A diff over 20,000
+  characters is stored truncated and will not reapply.
+- **Only Python repos** can have a chore today. The image has uv but no Node.
+- **4e needs the user.** Setup items 3 and 4 of the brief: `thomas-whitley/mercury-fixture`
+  (public, one passing test, branch protection on `main`) and `MERCURY_GITHUB_TOKEN`
+  in `.env` and the private repo's secrets. Then the integration test marked
+  `integration`, and the README row.
+- **A second session shared this working copy on 2026-09-30.** It was making
+  `pytest` runs require the bearer token and editing README, `docs/mercury.md`,
+  the Publish workflow and several tests. Both sessions running pytest at once
+  dropped each other's schema in `agent_runs_test`, so run with
+  `TEST_DATABASE_URL=postgresql://agent:agent@localhost:5432/agent_runs_test_chores`
+  when another session is active.
 
 ## Step 3 is done (2026-09-29)
 
