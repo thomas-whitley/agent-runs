@@ -42,6 +42,10 @@ param pagespeedApiKey string = ''
 @secure()
 param telegramBotToken string = ''
 
+@description('Fine grained GitHub token, contents and pull requests on the named repos. Only the worker holds it, for repo chores. Empty means a chore fails at its first push.')
+@secure()
+param mercuryGithubToken string = ''
+
 @description('The secret Telegram sends in X-Telegram-Bot-Api-Secret-Token. Empty refuses every webhook call.')
 @secure()
 param telegramWebhookSecret string = ''
@@ -210,11 +214,31 @@ var apiTelegramEnvironment = concat(
       ]
 )
 
-// The worker alone calls PageSpeed, so the key goes to it alone.
+var githubTokenSecret = empty(mercuryGithubToken)
+  ? []
+  : [
+      {
+        name: 'mercury-github-token'
+        value: mercuryGithubToken
+      }
+    ]
+
+var githubTokenEnvironment = empty(mercuryGithubToken)
+  ? []
+  : [
+      {
+        name: 'MERCURY_GITHUB_TOKEN'
+        secretRef: 'mercury-github-token'
+      }
+    ]
+
+// The worker alone calls PageSpeed and pushes chore branches, so the
+// PageSpeed key and the GitHub token go to it alone.
 var workerSecrets = concat(
   sharedSecrets,
   configSecret,
   telegramTokenSecret,
+  githubTokenSecret,
   empty(pagespeedApiKey)
     ? []
     : [
@@ -395,7 +419,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'OTEL_SERVICE_NAME'
               value: '${name}-worker'
             }
-          ], modelEnvironment, workerCheckEnvironment, configEnvironment, telegramTokenEnvironment)
+          ], modelEnvironment, workerCheckEnvironment, configEnvironment, telegramTokenEnvironment, githubTokenEnvironment)
         }
       ]
       scale: {

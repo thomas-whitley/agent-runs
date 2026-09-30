@@ -28,6 +28,7 @@ az deployment group create \
       pagespeedApiKey="${PAGESPEED_API_KEY:-}" \
       telegramBotToken="${TELEGRAM_BOT_TOKEN:-}" \
       telegramWebhookSecret="${TELEGRAM_WEBHOOK_SECRET:-}" \
+      mercuryGithubToken="${MERCURY_GITHUB_TOKEN:-}" \
       mercuryBearerToken="${MERCURY_BEARER_TOKEN:-}" \
       mercuryConfigB64="${MERCURY_CONFIG_B64:-}" \
   --output none

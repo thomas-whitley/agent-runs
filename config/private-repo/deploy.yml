@@ -63,6 +63,7 @@ jobs:
           PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          MERCURY_GITHUB_TOKEN: ${{ secrets.MERCURY_GITHUB_TOKEN }}
           MERCURY_BEARER_TOKEN: ${{ secrets.MERCURY_BEARER_TOKEN }}
         run: |
           # The Bicep sends each app's full secret list, so a missing secret
