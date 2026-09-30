@@ -72,8 +72,9 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
   worker's keys from `/proc/<pid>/environ`. Proven in the built image, where
   `cat /proc/1/environ` got Permission denied. As root with no such user the chore
   stops. The other session (`9936eb9`) found the same `/proc` hole in the pytest
-  sandbox (`app/sandbox.py`) and was told on 2026-09-30 it may reuse `_chore_ids`
-  and `_give_to` for it. Check whether it did before touching the sandbox.
+  sandbox and fixed it in `7693fc8` with a separate `sandbox` user, so a posted
+  test file cannot reach a chore's checkout. `app/sandbox.py` has its own copies of
+  the two helpers rather than a shared module.
 - **4e needs the user.** Setup items 3 and 4 of the brief: `thomas-whitley/mercury-fixture`
   (public, one passing test, branch protection on `main`) and `MERCURY_GITHUB_TOKEN`
   in `.env` and the private repo's secrets. Then the integration test marked
