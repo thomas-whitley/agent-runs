@@ -67,6 +67,13 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
   model call, and says in the PR body that the tests failed. A diff over 20,000
   characters is stored truncated and will not reapply.
 - **Only Python repos** can have a chore today. The image has uv but no Node.
+- **The chore user** (`8fb7b16`). The worker is root in the image, so a repo's
+  test command runs as the unprivileged `chore` user, which cannot read the
+  worker's keys from `/proc/<pid>/environ`. Proven in the built image, where
+  `cat /proc/1/environ` got Permission denied. As root with no such user the chore
+  stops. The other session (`9936eb9`) found the same `/proc` hole in the pytest
+  sandbox (`app/sandbox.py`) and was told on 2026-09-30 it may reuse `_chore_ids`
+  and `_give_to` for it. Check whether it did before touching the sandbox.
 - **4e needs the user.** Setup items 3 and 4 of the brief: `thomas-whitley/mercury-fixture`
   (public, one passing test, branch protection on `main`) and `MERCURY_GITHUB_TOKEN`
   in `.env` and the private repo's secrets. Then the integration test marked
