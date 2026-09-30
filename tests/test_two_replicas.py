@@ -6,7 +6,8 @@ stack with one exported and run it with the same:
 
     export MERCURY_BEARER_TOKEN=$(openssl rand -hex 32)
     docker compose up --build -d --wait
-    AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest tests/test_two_replicas.py -m integration
+    AGENT_RUNS_BASE_URL=http://localhost:8000 \\
+        uv run pytest tests/test_two_replicas.py -m integration
 """
 
 import http.client
