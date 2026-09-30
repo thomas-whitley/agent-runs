@@ -57,8 +57,13 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
   `GIT_CONFIG_*` env vars, never a file or URL. A background heartbeat on a second
   connection keeps the lease through a slow test run.
 - **git in the image** adds 35 MB compressed (132 to 167 MB). The user chose one
-  image, so **the README's 26.1 s cold start must be remeasured after the next
-  deploy** (method under step 3 above).
+  image. Remeasured on 2026-09-30 after deploying `66c0000`: 19.0 s from zero
+  replicas, with a 7.65 s pull of the 166 MB image. The README carries both figures.
+  Logs are read with `mercury-config`'s Logs workflow (`gh workflow run logs.yml -R
+  thomas-whitley/mercury-config -f query='<KQL>'`, then `gh run view --log`), which
+  signs in over OIDC, so no machine needs an Azure session. The Azure CLI is
+  installed on the Windows machine but not signed in, because the Outlook account
+  found no subscription.
 - **The deploy.** `mercuryGithubToken` is a new Bicep param, worker only.
   `config/private-repo/deploy.yml` passes `MERCURY_GITHUB_TOKEN`, and **the private
   repo's copy needs the same line** before the next `PUBLIC_SHA` bump.
@@ -85,9 +90,9 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
   It skips without the token, so CI skips it. README row green with PR 2 as the
   record. From Git Bash, run WSL scripts with `MSYS_NO_PATHCONV=1`, or `/mnt/c`
   paths get rewritten and `$(...)` inside `bash -lc '...'` came back empty.
-- **Still owed from 4e.** Add the fixture to `mercury-config`'s `mercury.yaml` with
-  `test_command: python -m unittest -v`, add the `MERCURY_GITHUB_TOKEN` line to the
-  private workflow, then bump `PUBLIC_SHA` and remeasure the cold start.
+- **Deployed.** `mercury-config` `922cccd` lists the fixture in `mercury.yaml`,
+  passes `MERCURY_GITHUB_TOKEN` to the deploy, and pins `PUBLIC_SHA` at `66c0000`.
+  `d19cfb9` added the Logs workflow. Step 5 is next.
 - **A second session shared this working copy on 2026-09-30.** It was making
   `pytest` runs require the bearer token and editing README, `docs/mercury.md`,
   the Publish workflow and several tests. Both sessions running pytest at once

@@ -41,7 +41,7 @@ The API serves a built page from `web/dist` at `/`. It is registered after every
 | A scheduled task runs with no client connected | `tests/test_scheduler.py`, and the live Job's log line and run row below | green |
 | A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | `tests/test_checks_integration.py` in CI's compose job, and `tests/test_scheduler.py` for the weekly schedule | green |
 | A budget trip ends a run with one event and one message | `tests/test_budget.py`, against the fake Telegram in `tests/telegram_fake.py` | green |
-| The webhook cold start is measured and stated | `tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent`, and the live log line below | green, 26.1 s from zero replicas |
+| The webhook cold start is measured and stated | `tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent`, and the live log line below | green, 19.0 s from zero replicas |
 | A Telegram message opens a PR on a named repo | `tests/test_repo_chore_github.py`, against the real `thomas-whitley/mercury-fixture` | green when run with a GitHub token, output below. CI has no token, so it skips there |
 
 ## Resume, and the test that proves it
@@ -417,13 +417,15 @@ tests/test_progress.py::test_a_self_hosted_check_result_edits_the_message PASSED
 
 ### The cold start, measured
 
-Each answer logs how long after the message was sent it went out, from the `date` Telegram stamps on every message. On the first message after the API has scaled to zero, that figure is the cold start as the sender feels it. On 2026-09-29 the API reached zero replicas at 04:35:39 UTC, and a `/status` sent at 04:36:55 produced this line, exactly as Log Analytics holds it for container `agent-runs-api`:
+Each answer logs how long after the message was sent it went out, from the `date` Telegram stamps on every message. On the first message after the API has scaled to zero, that figure is the cold start as the sender feels it. On 2026-09-30 the API reached zero replicas at 23:06:06 UTC, and a `/status` sent at 23:32:24 produced this line, exactly as Log Analytics holds it for container `agent-runs-api`:
 
 ```
-{"timestamp": "2026-09-29T04:37:21.144435+00:00", "level": "INFO", "logger": "agent_runs.telegram", "message": "answered /status 26.1 s after it was sent", "trace_id": "b330779d14a22534006f78ce355d1a8d", "span_id": "411555a6825960b0"}
+{"timestamp": "2026-09-30T23:32:42.999490+00:00", "level": "INFO", "logger": "agent_runs.telegram", "message": "answered /status 19.0 s after it was sent", "trace_id": "b18accea459617d4a05e09b5aff56475", "span_id": "b45154bf7451c07c"}
 ```
 
-Telegram's `date` has whole second resolution, so the true figure lies between 26.1 and 27.1 seconds. The Container Apps system log for the same wake shows where it went. The replica was assigned 2 seconds after the message was sent, the image was pulled by 16 seconds, the container started at 19 seconds, and the reply went at 26. Pulling the image took about 14 of those seconds. A warm `/status` on 2026-09-28 answered in 2.6 seconds, and free text got its "On it." in 2.1 seconds.
+Telegram's `date` has whole second resolution, so the true figure lies between 19.0 and 20.0 seconds. The Container Apps system log for the same wake shows where it went. The replica was assigned 2.4 seconds after the message was sent, the 166 MB image was pulled in 7.7 seconds and done by 10.0, the container started at 13.2, one startup probe failed at 14.2, and the reply went at 19.0.
+
+The first measurement, on 2026-09-29 with a 132 MB image, was 26.1 seconds, of which about 14 went on the image pull. The image grew by 34 MB when git was added for repo chores, yet the pull took half as long, so pull time varies between wakes by more than the image size explains. These are two samples, not a distribution. A warm `/status` on 2026-09-28 answered in 2.6 seconds, and free text got its "On it." in 2.1 seconds.
 
 ## A pull request from a Telegram message
 
