@@ -90,7 +90,7 @@ The image is built in two stages: a Node stage compiles `web/`, and the Python s
 
 ## What is public
 
-Run metadata (type, provider, executor, status, tokens, duration) is public and shows on the runs page. Event bodies are behind a bearer token. A `public` flag per task type lets `pytest` demo runs show in full. The browser never authenticates: it shows metadata for every run and full events only for public task types, which is why there is no login and no token in any page. Sessions and other clients authenticate with one static bearer token from secrets, rotated by redeploy. Rate limits on the public endpoints are unchanged.
+Run metadata (type, provider, executor, status, tokens, duration) is public and shows on the runs page. Event bodies are behind a bearer token. A `public` flag per task type would let a type's runs be posted and shown in full without it, and no type sets it. `pytest` did until 2026-09-30, when a scan showed that a posted pytest file runs as the worker's user and can read the worker's keys from `/proc`, then print them into its own events. The browser never authenticates: it shows metadata for every run, which is why there is no login and no token in any page. Sessions and other clients authenticate with one static bearer token from secrets, rotated by redeploy. Rate limits on the public endpoints are unchanged.
 
 ## Observability
 

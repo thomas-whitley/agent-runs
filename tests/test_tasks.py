@@ -10,9 +10,10 @@ def test_the_five_task_types_are_registered():
     assert set(TASK_TYPES) == EXPECTED_NAMES
 
 
-def test_pytest_is_the_only_public_type():
-    assert TASK_TYPES["pytest"].public is True
-    assert all(TASK_TYPES[name].public is False for name in EXPECTED_NAMES if name != "pytest")
+def test_no_type_is_public():
+    """pytest was public until the worker was found to run its task as code
+    beside the worker's secrets. Every type now needs the bearer token."""
+    assert all(TASK_TYPES[name].public is False for name in EXPECTED_NAMES)
 
 
 def test_site_check_makes_no_model_call():

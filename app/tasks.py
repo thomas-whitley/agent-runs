@@ -26,7 +26,7 @@ _CHAT_TOOLS = (
 )
 
 _TYPES = (
-    TaskType(name="pytest", tools=(), provider="gemini", budget_tokens=50_000, public=True),
+    TaskType(name="pytest", tools=(), provider="gemini", budget_tokens=50_000),
     TaskType(name="chat", tools=_CHAT_TOOLS, provider="gemini", budget_tokens=20_000),
     TaskType(name="repo_chore", tools=(), provider="gemini", budget_tokens=50_000),
     TaskType(name="site_check", tools=(), provider=None, budget_tokens=0),

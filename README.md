@@ -62,10 +62,10 @@ The tests run against a real uvicorn on a real socket rather than an in process 
 client, because an in process client buffers the response instead of delivering it
 chunk by chunk and so cannot drop a live stream part way through.
 
-The same thing by hand, against the compose stack, replaying from event 1:
+The same thing by hand, against the compose stack started with `MERCURY_BEARER_TOKEN` exported, replaying from event 1. A pytest run's events sit behind the bearer token, for the reason under "What the agent does".
 
 ```
-$ curl -s -N -H "Last-Event-ID: 1" localhost:8000/runs/$RUN/events
+$ curl -s -N -H "Authorization: Bearer $MERCURY_BEARER_TOKEN" -H "Last-Event-ID: 1" localhost:8000/runs/$RUN/events
 id: 2
 event: done
 data: {"kind": "done", "status": "succeeded"}
@@ -147,11 +147,13 @@ client lives in the api process, so there was no cursor to move. That is the
 whole point of putting the events table in the middle.
 
 These need the stack up, so they are marked `integration` and left out of the
-default run.
+default run. The run they create needs the bearer token, so the stack and the
+test share one.
 
 ```
+export MERCURY_BEARER_TOKEN=$(openssl rand -hex 32)
 docker compose up --build -d --wait
-AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest -m integration
+AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest tests/test_two_replicas.py -m integration
 ```
 
 ## A claim that outlives its worker
@@ -168,9 +170,11 @@ still counts against the budget. `tests/test_idempotent.py` and
 
 ## What the agent does
 
-You post a pytest file. The agent writes the function that makes it pass. Verification is pytest's exit code, run in a subprocess with a timeout, a scrubbed environment so no key reaches the generated code, and both of Python's socket layers disabled.
+You post a pytest file with the bearer token. The agent writes the function that makes it pass. Verification is pytest's exit code, run in a subprocess with a timeout, a scrubbed environment, and both of Python's socket layers disabled.
 
 That is a demo guard, not isolation, and the difference matters. The worker container itself has a network, because it calls the model and Postgres. Disabling `socket` and `_socket` stops generated code reaching out by accident, and `tests/test_sandbox.py` asserts that both a plain `socket.create_connection` and a raw `import _socket` fail. It would not stop code written to get out.
+
+The scrubbed environment keeps keys out of the subprocess's own environment and no further. The subprocess runs as the same user as the worker, so code in the posted file can read the worker's environment from `/proc`, database URL and model keys included, and print it into the verify output. That is why posting a pytest run, and reading its events, needs the bearer token. Until 2026-09-30 anyone could do both.
 
 The subprocess starts with the socket module replaced, so the code under verification cannot open a connection. `tests/test_sandbox.py` asserts that a test which calls `socket.create_connection` fails, that a solution which loops forever is killed at the timeout, and that a wrong answer comes back with pytest's output rather than an exception.
 

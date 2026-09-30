@@ -1,10 +1,12 @@
 """Two replicas serve one run, and a reconnect landing on the other resumes.
 
 This one needs the compose stack up, because the proof is two separate
-processes behind one port. Run it with:
+processes behind one port. A pytest run needs the bearer token, so start the
+stack with one exported and run it with the same:
 
+    export MERCURY_BEARER_TOKEN=$(openssl rand -hex 32)
     docker compose up --build -d --wait
-    AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest -m integration
+    AGENT_RUNS_BASE_URL=http://localhost:8000 uv run pytest tests/test_two_replicas.py -m integration
 """
 
 import http.client
@@ -30,6 +32,14 @@ def base_url() -> str:
 
 
 @pytest.fixture(scope="module")
+def token() -> str:
+    value = os.environ.get("MERCURY_BEARER_TOKEN")
+    if not value:
+        pytest.skip("export the MERCURY_BEARER_TOKEN the stack was started with")
+    return value
+
+
+@pytest.fixture(scope="module")
 def live_database_url() -> str:
     """The stack's own database. Nothing here drops or recreates a schema."""
     return os.environ.get("TEST_DATABASE_URL", "postgresql://agent:agent@localhost:5432/agent_runs")
@@ -40,13 +50,13 @@ def _connect(base_url: str) -> http.client.HTTPConnection:
     return http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=60)
 
 
-def create_run(base_url: str) -> str:
+def create_run(base_url: str, token: str) -> str:
     conn = _connect(base_url)
     conn.request(
         "POST",
         "/runs",
         json.dumps({"type": "pytest", "inputs": {"task": "two replica check"}}),
-        {"content-type": "application/json"},
+        {"content-type": "application/json", "Authorization": f"Bearer {token}"},
     )
     body = json.load(conn.getresponse())
     conn.close()
@@ -62,9 +72,11 @@ def append_event(database_url: str, run_id: str, seq: int, payload: dict) -> Non
         )
 
 
-def read_stream(base_url: str, run_id: str, last_event_id: int | None, stop_after: int | None):
+def read_stream(
+    base_url: str, token: str, run_id: str, last_event_id: int | None, stop_after: int | None
+):
     """Return (replica, events). Closes the socket early when stop_after is set."""
-    headers = {"Accept": "text/event-stream"}
+    headers = {"Accept": "text/event-stream", "Authorization": f"Bearer {token}"}
     if last_event_id is not None:
         headers["Last-Event-ID"] = str(last_event_id)
 
@@ -106,12 +118,12 @@ def read_stream(base_url: str, run_id: str, last_event_id: int | None, stop_afte
     return replica, events
 
 
-def test_a_stream_dropped_on_one_replica_resumes_on_the_other(base_url, live_database_url):
-    run_id = create_run(base_url)
+def test_a_stream_dropped_on_one_replica_resumes_on_the_other(base_url, token, live_database_url):
+    run_id = create_run(base_url, token)
     for seq in (1, 2, 3):
         append_event(live_database_url, run_id, seq, {"kind": "step", "seq": seq})
 
-    first_replica, first_pass = read_stream(base_url, run_id, None, stop_after=3)
+    first_replica, first_pass = read_stream(base_url, token, run_id, None, stop_after=3)
     assert [event[1]["seq"] for event in first_pass] == [1, 2, 3]
     last_seen = first_pass[-1][0]
 
@@ -127,7 +139,7 @@ def test_a_stream_dropped_on_one_replica_resumes_on_the_other(base_url, live_dat
     replicas_seen = {first_replica}
     second_pass = None
     for _ in range(MAX_RECONNECT_TRIES):
-        replica, events = read_stream(base_url, run_id, last_seen, stop_after=None)
+        replica, events = read_stream(base_url, token, run_id, last_seen, stop_after=None)
         replicas_seen.add(replica)
         second_pass = events
         if replica != first_replica:

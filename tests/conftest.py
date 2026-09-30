@@ -112,6 +112,17 @@ def start_server(clean_db: str, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
+def auth_headers(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Configure the api's bearer token and return the header that carries it.
+
+    The app reads the token when it starts, so this runs before start_server()
+    is called in the test body.
+    """
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+    return {"Authorization": "Bearer the-real-token"}
+
+
+@pytest.fixture
 def span_exporter():
     """Spans as a test would see them, never sent to a global tracer provider.
 

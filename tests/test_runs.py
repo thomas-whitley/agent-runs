@@ -4,12 +4,13 @@ import httpx2
 import psycopg
 
 
-def test_post_runs_creates_a_pending_run(start_server, clean_db):
+def test_post_runs_creates_a_pending_run(start_server, clean_db, auth_headers):
     base_url = start_server()
 
     response = httpx2.post(
         f"{base_url}/runs",
         json={"type": "pytest", "inputs": {"task": "make tests/example_test.py pass"}},
+        headers=auth_headers,
     )
 
     assert response.status_code == 201
@@ -27,7 +28,7 @@ def test_post_runs_creates_a_pending_run(start_server, clean_db):
 
 
 def test_a_run_created_with_tracing_off_stores_no_trace_context(
-    start_server, clean_db, monkeypatch
+    start_server, clean_db, monkeypatch, auth_headers
 ):
     """NULL, not an empty string, so the column keeps one meaning."""
     monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
@@ -36,6 +37,7 @@ def test_a_run_created_with_tracing_off_stores_no_trace_context(
     response = httpx2.post(
         f"{base_url}/runs",
         json={"type": "pytest", "inputs": {"task": "make tests/example_test.py pass"}},
+        headers=auth_headers,
     )
     run_id = response.json()["id"]
 
@@ -145,13 +147,14 @@ def test_post_runs_rejects_the_wrong_bearer_token(start_server, monkeypatch):
     assert response.status_code == 401
 
 
-def test_post_runs_never_requires_a_token_for_the_public_pytest_type(start_server, monkeypatch):
+def test_post_runs_requires_a_bearer_token_for_a_pytest_run(start_server, monkeypatch):
+    """The worker runs a pytest run's task as code, so an anonymous caller must not post one."""
     monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
     base_url = start_server()
 
     response = httpx2.post(f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}})
 
-    assert response.status_code == 201
+    assert response.status_code == 401
 
 
 def test_post_runs_refuses_a_non_public_type_when_no_token_is_configured(start_server):
@@ -184,15 +187,16 @@ def test_events_of_a_non_public_run_require_the_bearer_token(start_server, monke
     assert denied.status_code == 401
 
 
-def test_events_of_a_public_run_never_require_a_token(start_server, monkeypatch):
-    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+def test_events_of_a_pytest_run_require_the_bearer_token(start_server, auth_headers):
+    """The verify step's output is in these events, so they sit behind the token too."""
     base_url = start_server()
     created = httpx2.post(
-        f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}}
+        f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}}, headers=auth_headers
     ).json()
 
-    with httpx2.stream("GET", f"{base_url}/runs/{created['id']}/events") as response:
-        assert response.status_code == 200
+    response = httpx2.get(f"{base_url}/runs/{created['id']}/events")
+
+    assert response.status_code == 401
 
 
 def _post_site_check(base_url: str, inputs: dict) -> httpx2.Response:
@@ -251,10 +255,12 @@ def test_post_runs_rejects_a_check_kind_on_a_type_that_is_not_a_check(start_serv
     assert response.status_code == 422
 
 
-def test_a_run_that_is_not_a_check_has_no_check_kind(start_server, clean_db):
+def test_a_run_that_is_not_a_check_has_no_check_kind(start_server, clean_db, auth_headers):
     base_url = start_server()
 
-    response = httpx2.post(f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}})
+    response = httpx2.post(
+        f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}}, headers=auth_headers
+    )
 
     with psycopg.connect(clean_db) as conn:
         kind = conn.execute(

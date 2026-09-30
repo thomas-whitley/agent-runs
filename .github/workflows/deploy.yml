@@ -21,12 +21,17 @@ env:
 
 jobs:
   # The two replica proof runs against compose on every deploy, because it is
-  # free here and costs an Azure replica otherwise. The checks integration
-  # tests skip here with no bearer token set; CI's compose job runs them.
+  # free here and costs an Azure replica otherwise. Only that file runs here;
+  # CI's compose job runs the checks integration tests.
   verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # A pytest run needs the bearer token. A throwaway one for this job's
+      # stack only, never stored anywhere.
+      - name: Make a bearer token for the stack
+        run: echo "MERCURY_BEARER_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
       - name: Start the stack
         run: docker compose up --build --detach --wait
@@ -44,7 +49,7 @@ jobs:
         env:
           AGENT_RUNS_BASE_URL: http://localhost:8000
           AGENT_RUNS_DATABASE_URL: postgresql://agent:agent@localhost:5432/agent_runs
-        run: uv run pytest -m integration -o addopts= -v
+        run: uv run pytest tests/test_two_replicas.py -m integration -o addopts= -v
 
       - name: Stop the stack
         if: always()

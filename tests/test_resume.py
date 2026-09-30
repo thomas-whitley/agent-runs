@@ -15,27 +15,31 @@ def append_event(database_url: str, run_id: str, seq: int, payload: dict) -> Non
         )
 
 
-def create_run(base_url: str) -> str:
+def create_run(base_url: str, headers: dict[str, str]) -> str:
     response = httpx2.post(
-        f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "make the test pass"}}
+        f"{base_url}/runs",
+        json={"type": "pytest", "inputs": {"task": "make the test pass"}},
+        headers=headers,
     )
     response.raise_for_status()
     return response.json()["id"]
 
 
-def seed_run(base_url: str, database_url: str, step_count: int) -> str:
-    run_id = create_run(base_url)
+def seed_run(base_url: str, database_url: str, step_count: int, headers: dict[str, str]) -> str:
+    run_id = create_run(base_url, headers)
     for seq in range(1, step_count + 1):
         append_event(database_url, run_id, seq, {"kind": "step", "seq": seq})
     append_event(database_url, run_id, step_count + 1, {"kind": "done", "status": "succeeded"})
     return run_id
 
 
-def test_stream_replays_every_event_then_closes_on_done(start_server, clean_db):
+def test_stream_replays_every_event_then_closes_on_done(start_server, clean_db, auth_headers):
     base_url = start_server()
-    run_id = seed_run(base_url, clean_db, step_count=4)
+    run_id = seed_run(base_url, clean_db, step_count=4, headers=auth_headers)
 
-    with httpx2.stream("GET", f"{base_url}/runs/{run_id}/events", timeout=15) as response:
+    with httpx2.stream(
+        "GET", f"{base_url}/runs/{run_id}/events", headers=auth_headers, timeout=15
+    ) as response:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         events = list(read_sse(response.iter_lines()))
@@ -45,13 +49,17 @@ def test_stream_replays_every_event_then_closes_on_done(start_server, clean_db):
     assert [event.id for event in events] == sorted(event.id for event in events)
 
 
-def test_dropping_a_live_stream_and_reconnecting_resumes_exactly_once(start_server, clean_db):
+def test_dropping_a_live_stream_and_reconnecting_resumes_exactly_once(
+    start_server, clean_db, auth_headers
+):
     """Steps arrive while the client is connected. It drops after step 3, then resumes."""
     base_url = start_server(keepalive_seconds=0.2)
-    run_id = create_run(base_url)
+    run_id = create_run(base_url, auth_headers)
 
     first_pass = []
-    with httpx2.stream("GET", f"{base_url}/runs/{run_id}/events", timeout=15) as response:
+    with httpx2.stream(
+        "GET", f"{base_url}/runs/{run_id}/events", headers=auth_headers, timeout=15
+    ) as response:
         assert response.status_code == 200
         reader = read_sse(response.iter_lines())
 
@@ -72,7 +80,7 @@ def test_dropping_a_live_stream_and_reconnecting_resumes_exactly_once(start_serv
     with httpx2.stream(
         "GET",
         f"{base_url}/runs/{run_id}/events",
-        headers={"Last-Event-ID": str(last_seen)},
+        headers={**auth_headers, "Last-Event-ID": str(last_seen)},
         timeout=15,
     ) as response:
         second_pass = list(read_sse(response.iter_lines()))
@@ -95,7 +103,7 @@ def test_unknown_run_is_not_found(start_server):
     assert response.json()["detail"] == "run not found"
 
 
-def test_reconnecting_after_done_closes_instead_of_hanging(start_server, clean_db):
+def test_reconnecting_after_done_closes_instead_of_hanging(start_server, clean_db, auth_headers):
     """A cursor at the done event must end the stream, not poll Postgres forever.
 
     Left open it holds a Container Apps replica above zero and breaks scale to
@@ -104,14 +112,16 @@ def test_reconnecting_after_done_closes_instead_of_hanging(start_server, clean_d
     import time
 
     base_url = start_server(keepalive_seconds=0.2)
-    run_id = seed_run(base_url, clean_db, step_count=2)
+    run_id = seed_run(base_url, clean_db, step_count=2, headers=auth_headers)
 
     with psycopg.connect(clean_db, autocommit=True) as conn:
         conn.execute(
             "UPDATE runs SET status = 'succeeded', finished_at = now() WHERE id = %s", (run_id,)
         )
 
-    with httpx2.stream("GET", f"{base_url}/runs/{run_id}/events", timeout=15) as response:
+    with httpx2.stream(
+        "GET", f"{base_url}/runs/{run_id}/events", headers=auth_headers, timeout=15
+    ) as response:
         events = list(read_sse(response.iter_lines()))
     last_id = events[-1].id
 
@@ -124,7 +134,7 @@ def test_reconnecting_after_done_closes_instead_of_hanging(start_server, clean_d
     with httpx2.stream(
         "GET",
         f"{base_url}/runs/{run_id}/events",
-        headers={"Last-Event-ID": str(last_id)},
+        headers={**auth_headers, "Last-Event-ID": str(last_id)},
         timeout=10,
     ) as response:
         for line in response.iter_lines():
