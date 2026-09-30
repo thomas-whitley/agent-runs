@@ -12,8 +12,10 @@ there means a worker got that far and then died. A takeover then skips the
 model and the tests and only makes sure the pull request exists.
 
 The test command runs in a subprocess with a timeout and an environment that
-holds no secret, only PATH, a throwaway HOME and the locale. It has network,
-because a repo's tests need their dependencies. It is not isolation. The
+holds no secret, only PATH, a throwaway HOME and the locale. In the image the
+worker is root, so the command runs as the unprivileged chore user instead,
+which cannot read the worker's environment through /proc. It has network,
+because a repo's tests need their dependencies, so it is not isolation. The
 GitHub token reaches git only as an HTTP header in git's own environment, so
 it is never written to .git/config, never in a URL and never in a step.
 """
@@ -22,6 +24,7 @@ import base64
 import json
 import logging
 import os
+import pwd
 import re
 import shutil
 import signal
@@ -58,6 +61,9 @@ HEARTBEAT_SECONDS = 30.0
 GIT_TIMEOUT_SECONDS = 120.0
 GITHUB_TIMEOUT_SECONDS = 20.0
 AUTHOR = ("mercury", "mercury@users.noreply.github.com")
+# Created in the Dockerfile. The test command runs as this user when the
+# worker is root, as it is in the image.
+CHORE_USER = "chore"
 
 SYSTEM = """You change a git repository to carry out one instruction from its owner. \
 Answer with a single JSON object and nothing else."""
@@ -421,9 +427,38 @@ def _scrubbed_env(home: Path) -> dict[str, str]:
     return env
 
 
+def _chore_ids() -> tuple[int, int] | None:
+    """The user the test command runs as. None when the worker is not root,
+    as in the tests, where it cannot switch users and runs as itself. As root
+    with no chore user it refuses, rather than run the repo's code as root."""
+    if os.geteuid() != 0:
+        return None
+    try:
+        entry = pwd.getpwnam(CHORE_USER)
+    except KeyError:
+        raise ChoreError(f"the worker is root and there is no {CHORE_USER} user") from None
+    return entry.pw_uid, entry.pw_gid
+
+
+def _give_to(path: Path, uid: int, gid: int) -> None:
+    os.chown(path, uid, gid)
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            os.chown(os.path.join(root, name), uid, gid, follow_symlinks=False)
+
+
 def _run_tests(clone: Path, setup: ChoreSetup, workdir: Path) -> tuple[bool, int | None, str]:
     home = workdir / "home"
     home.mkdir(exist_ok=True)
+    ids = _chore_ids()
+    switch: dict = {}
+    if ids is not None:
+        uid, gid = ids
+        _give_to(clone, uid, gid)
+        _give_to(home, uid, gid)
+        # mkdtemp makes the workdir 0700. The chore user has to pass through it.
+        workdir.chmod(0o711)
+        switch = {"user": uid, "group": gid, "extra_groups": []}
     process = subprocess.Popen(
         ["sh", "-c", setup.repo.test_command],
         cwd=clone,
@@ -432,6 +467,7 @@ def _run_tests(clone: Path, setup: ChoreSetup, workdir: Path) -> tuple[bool, int
         stderr=subprocess.STDOUT,
         text=True,
         start_new_session=True,
+        **switch,
     )
     try:
         output, _ = process.communicate(timeout=setup.test_timeout_seconds)
@@ -447,15 +483,23 @@ class _Git:
     def __init__(self, workdir: Path, setup: ChoreSetup) -> None:
         home = workdir / "git-home"
         home.mkdir(exist_ok=True)
-        self._env = {**_scrubbed_env(home), "GIT_TERMINAL_PROMPT": "0"}
+        # The clone belongs to the chore user once the tests have run, and git
+        # running as root refuses a repo another user owns unless told not to.
+        self._env = {
+            **_scrubbed_env(home),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": "*",
+        }
         self._remote_env = dict(self._env)
         if setup.token and setup.clone_base.startswith("https://"):
             basic = base64.b64encode(f"x-access-token:{setup.token}".encode()).decode()
             self._remote_env.update(
                 {
-                    "GIT_CONFIG_COUNT": "1",
-                    "GIT_CONFIG_KEY_0": "http.extraheader",
-                    "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+                    "GIT_CONFIG_COUNT": "2",
+                    "GIT_CONFIG_KEY_1": "http.extraheader",
+                    "GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {basic}",
                 }
             )
 

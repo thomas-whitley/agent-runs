@@ -472,3 +472,69 @@ def test_a_succeeded_chore_offers_nothing(
 
     assert fake_telegram.sent() == []
     assert migrated_db.execute("SELECT count(*) FROM approvals").fetchone() == (0,)
+
+
+# In the image the worker is root, and a test command running as the worker's
+# user could read its keys from /proc/<pid>/environ. So as root the command
+# runs as the unprivileged chore user, and with no such user it does not run.
+
+
+class _FakeProcess:
+    returncode = 0
+    pid = 1
+
+    def communicate(self, timeout=None):
+        return "ok", None
+
+
+def test_as_root_the_test_command_runs_as_the_chore_user(tmp_path, monkeypatch):
+    import pwd
+
+    from app import repo_chore
+
+    clone = tmp_path / "repo"
+    clone.mkdir()
+    (clone / "calc.py").write_text(CALC)
+    chowned, popen_kwargs = [], {}
+    monkeypatch.setattr(repo_chore.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        repo_chore.pwd,
+        "getpwnam",
+        lambda name: pwd.struct_passwd((name, "x", 4321, 4321, "", "/", "/bin/sh")),
+    )
+    monkeypatch.setattr(
+        repo_chore.os, "chown", lambda path, uid, gid, **kwargs: chowned.append((str(path), uid))
+    )
+
+    def fake_popen(args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return _FakeProcess()
+
+    monkeypatch.setattr(repo_chore.subprocess, "Popen", fake_popen)
+    chore = setup(tmp_path, github=type("G", (), {"url": "http://unused"})())
+
+    passed, _, _ = repo_chore._run_tests(clone, chore, tmp_path)
+
+    assert passed
+    assert (popen_kwargs["user"], popen_kwargs["group"]) == (4321, 4321)
+    assert popen_kwargs["extra_groups"] == []
+    assert (str(clone / "calc.py"), 4321) in chowned
+    assert (str(tmp_path / "home"), 4321) in chowned
+
+
+def test_as_root_with_no_chore_user_the_tests_do_not_run(tmp_path, monkeypatch):
+    from app import repo_chore
+
+    clone = tmp_path / "repo"
+    clone.mkdir()
+
+    def no_such_user(name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(repo_chore.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(repo_chore.pwd, "getpwnam", no_such_user)
+    monkeypatch.setattr(repo_chore.subprocess, "Popen", lambda *a, **k: pytest.fail("ran as root"))
+    chore = setup(tmp_path, github=type("G", (), {"url": "http://unused"})())
+
+    with pytest.raises(repo_chore.ChoreError, match="chore user"):
+        repo_chore._run_tests(clone, chore, tmp_path)
