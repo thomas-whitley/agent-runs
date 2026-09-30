@@ -159,13 +159,13 @@ webhook**, then 4, 5, 6c and 6d in the brief's order.
   runs page as the one page.
 - **The self hosted deployment** is `checks/Dockerfile` (Node 22, Debian Chromium,
   `CHROME_EXTRA_FLAGS="--no-sandbox --disable-dev-shm-usage"`) and
-  `checks/compose.yml` with `restart: unless-stopped`. It runs on this Linux laptop
-  as `thomas-laptop`, reading `checks/.env` (mode 600, gitignored), which holds
-  `API_BASE_URL`, `WORKER_ID` and the live bearer token, read from the api's
-  Container Apps secret straight into the file and never printed. **Docker here is
-  socket activated (`docker.service` disabled, `docker.socket` enabled), so after a
-  reboot the worker is not back until something touches Docker.** `sudo systemctl
-  enable docker` fixes that.
+  `checks/compose.yml` with `restart: unless-stopped`. It runs on the desktop
+  T_BUCKETS, in WSL Ubuntu, as `t-buckets` (moved off the laptop, whose Docker is
+  now disabled, on 2026-09-30). It reads `checks/.env` (mode 600, gitignored),
+  which holds `API_BASE_URL`, `WORKER_ID` and the live bearer token, read from the
+  api's Container Apps secret straight into the file and never printed. WSL is
+  kept running from boot by a scheduled task, so the worker comes back after a
+  reboot without anyone logging in.
 - **The integration test** is `tests/test_checks_integration.py`, in CI's compose
   job only. That job makes a throwaway bearer token, sets `CHECK_CLAIM_WINDOW=20`
   and `PAGESPEED_URL` to a port where nothing listens (the override is new in
