@@ -9,6 +9,12 @@ RUN npm run build
 
 FROM python:3.12-slim
 
+# git for repo chores (app/repo_chore.py). Without recommends, so no perl
+# helpers or man pages ride along into an image every cold start pulls.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
 
 WORKDIR /srv
