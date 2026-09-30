@@ -1,6 +1,7 @@
 services:
   db:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: agent
@@ -17,6 +18,7 @@ services:
   # the only way in and a client cannot pin itself to one of them.
   api:
     build: .
+    restart: unless-stopped
     environment:
       ROLE: api
       DATABASE_URL: postgresql://agent:agent@db:5432/agent_runs
@@ -37,6 +39,7 @@ services:
 
   proxy:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
