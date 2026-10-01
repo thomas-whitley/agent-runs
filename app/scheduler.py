@@ -2,7 +2,8 @@
 the configured sites, creates any weekly browser check that is due, and
 exits. It creates each uptime run through the API with the bearer token, so
 the run exists with no client attached to watch it, then executes and closes
-the run itself in the same process. A plain HTTP check needs no browser and
+the run itself in the same process. Each run also applies the retention
+cleanup (app/cleanup.py). A plain HTTP check needs no browser and
 no separate worker, and the agent loop worker never claims uptime runs (see
 _CLAIMABLE in app/worker.py).
 
@@ -20,6 +21,7 @@ from opentelemetry import trace
 
 from app.approvals import ask, expire_due
 from app.checks import check_site
+from app.cleanup import run_cleanup
 from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.mercury_config import load_mercury_config
@@ -229,6 +231,7 @@ def main() -> None:  # pragma: no cover - the process entry point
         created += schedule_weekly_checks(
             conn, config.pages, settings.api_base_url, settings.mercury_bearer_token
         )
+        run_cleanup(conn, config.event_bodies_days, config.runs_days)
 
     logger.info("scheduler run complete, %s check(s) created", len(created))
 

@@ -1,7 +1,8 @@
-"""Loads only what step 2a reads from mercury.yaml: the portfolio's sites.
+"""Loads the parts of mercury.yaml that something reads: the portfolio, the
+Telegram chat and the retention windows.
 
-The full schema (providers, tasks, budgets, telegram, retention) belongs to
-later steps; parsing sections nothing calls yet is code with no caller.
+Sections nothing calls yet (providers, tasks, budgets) are not parsed;
+parsing them would be code with no caller.
 """
 
 import pytest
@@ -68,3 +69,21 @@ def test_a_zero_or_missing_chat_id_allows_no_chat(tmp_path, telegram):
     config_file.write_text(yaml.dump({"telegram": telegram}))
 
     assert load_mercury_config(config_file).telegram_chat_id is None
+
+
+def test_load_mercury_config_reads_the_retention_windows(tmp_path):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(yaml.dump({"retention": {"event_bodies_days": 14, "runs_days": 90}}))
+
+    config = load_mercury_config(config_file)
+
+    assert (config.event_bodies_days, config.runs_days) == (14, 90)
+
+
+def test_the_retention_windows_default_to_30_days_and_a_year(tmp_path):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(yaml.dump({"portfolio": {}}))
+
+    config = load_mercury_config(config_file)
+
+    assert (config.event_bodies_days, config.runs_days) == (30, 365)
