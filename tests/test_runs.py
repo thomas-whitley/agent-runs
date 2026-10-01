@@ -166,35 +166,43 @@ def test_post_runs_refuses_a_non_public_type_when_no_token_is_configured(start_s
     assert response.status_code == 401
 
 
-def test_events_of_a_non_public_run_require_the_bearer_token(start_server, monkeypatch):
-    """The guard list: event bodies sit behind the same token as run creation."""
-    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "the-real-token")
+def test_event_bodies_of_a_non_public_run_require_the_bearer_token(
+    start_server, clean_db, auth_headers
+):
+    """The guard list: event bodies sit behind the same token as run creation.
+    Without it the stream still runs, with every body left out
+    (tests/test_events_without_token.py)."""
+    from tests.test_resume import append_event
+
     base_url = start_server()
     created = httpx2.post(
-        f"{base_url}/runs",
-        json={"type": "digest", "inputs": {"task": "x"}},
-        headers={"Authorization": "Bearer the-real-token"},
+        f"{base_url}/runs", json={"type": "digest", "inputs": {"task": "x"}}, headers=auth_headers
     ).json()
+    append_event(
+        clean_db, created["id"], 1, {"seq": 1, "kind": "done", "output": {"status": "succeeded"}}
+    )
 
-    denied = httpx2.get(f"{base_url}/runs/{created['id']}/events")
+    with httpx2.stream("GET", f"{base_url}/runs/{created['id']}/events", timeout=15) as bare:
+        bare_body = bare.read().decode()
     with httpx2.stream(
-        "GET",
-        f"{base_url}/runs/{created['id']}/events",
-        headers={"Authorization": "Bearer the-real-token"},
+        "GET", f"{base_url}/runs/{created['id']}/events", headers=auth_headers, timeout=15
     ) as allowed:
-        assert allowed.status_code == 200
+        allowed_body = allowed.read().decode()
 
-    assert denied.status_code == 401
+    assert '"output": {"status": "succeeded"}' in bare_body
+    assert '"kind": "done"' in allowed_body
 
 
-def test_events_of_a_pytest_run_require_the_bearer_token(start_server, auth_headers):
-    """The verify step's output is in these events, so they sit behind the token too."""
+def test_events_of_a_pytest_run_refuse_a_wrong_token(start_server, auth_headers):
+    """The verify step's output is in these events, so a bad token gets nothing."""
     base_url = start_server()
     created = httpx2.post(
         f"{base_url}/runs", json={"type": "pytest", "inputs": {"task": "x"}}, headers=auth_headers
     ).json()
 
-    response = httpx2.get(f"{base_url}/runs/{created['id']}/events")
+    response = httpx2.get(
+        f"{base_url}/runs/{created['id']}/events", headers={"Authorization": "Bearer nope"}
+    )
 
     assert response.status_code == 401
 

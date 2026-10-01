@@ -116,7 +116,13 @@ def create_app() -> FastAPI:
         return {"runs": [serialize_run_row(row) for row in rows], "next_cursor": next_cursor}
 
     @app.get("/runs/{run_id}/events")
-    async def stream_run_events(run_id: uuid.UUID, request: Request) -> StreamingResponse:
+    async def stream_run_events(
+        run_id: uuid.UUID,
+        request: Request,
+        # A browser EventSource cannot set Last-Event-ID on a fresh
+        # connection, so the runs page resumes with ?after= instead.
+        after: int | None = Query(default=None, ge=0),
+    ) -> StreamingResponse:
         pool = request.app.state.pool
 
         async with pool.connection() as conn:
@@ -124,14 +130,24 @@ def create_app() -> FastAPI:
             row = await cursor.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="run not found")
-        # Event bodies of a non-public run sit behind the same token as its creation.
+        # Event bodies of a non-public run sit behind the same token as its
+        # creation. With no Authorization header at all the stream still runs,
+        # without bodies, which is what the runs page shows. A header that is
+        # present and wrong is refused, not quietly downgraded.
+        bodies = True
         if not TASK_TYPES[row[0]].public:
-            require_bearer_token(request)
+            if "authorization" in request.headers:
+                require_bearer_token(request)
+            else:
+                bodies = False
 
-        after_id = parse_last_event_id(request.headers.get("Last-Event-ID"))
+        header = request.headers.get("Last-Event-ID")
+        after_id = parse_last_event_id(header) if header else (after or 0)
 
         return StreamingResponse(
-            event_stream(pool, run_id, after_id, request.app.state.settings.keepalive_seconds),
+            event_stream(
+                pool, run_id, after_id, request.app.state.settings.keepalive_seconds, bodies
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

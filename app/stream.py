@@ -40,11 +40,22 @@ def format_event(event_id: int, payload: dict[str, Any]) -> str:
     return f"id: {event_id}\nevent: {name}\ndata: {json.dumps(payload)}\n\n"
 
 
+def without_body(payload: dict[str, Any]) -> dict[str, Any]:
+    """What a caller with no token sees of an event: its step number and kind,
+    and for the done event its status. Code, test output and diffs are left out."""
+    kept: dict[str, Any] = {k: payload[k] for k in ("seq", "kind") if k in payload}
+    if payload.get("kind") == "done":
+        output = payload.get("output") or {}
+        kept["output"] = {"status": output.get("status", payload.get("status"))}
+    return kept
+
+
 async def event_stream(
     pool: AsyncConnectionPool,
     run_id: uuid.UUID,
     after_id: int,
     keepalive_seconds: float,
+    bodies: bool = True,
 ) -> AsyncIterator[str]:
     cursor_id = after_id
     idle_seconds = 0.0
@@ -69,7 +80,7 @@ async def event_stream(
             idle_seconds = 0.0
             for event_id, payload in rows:
                 cursor_id = event_id
-                yield format_event(event_id, payload)
+                yield format_event(event_id, payload if bodies else without_body(payload))
                 if payload.get("kind") == "done":
                     return
             continue
