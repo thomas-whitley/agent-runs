@@ -34,6 +34,10 @@ param voyageApiKey string = ''
 @secure()
 param mercuryBearerToken string = ''
 
+@description('Ollama cloud API key. chat runs on Ollama first, and every other model type falls back to it. Empty leaves chat on its Gemini fallback.')
+@secure()
+param ollamaApiKey string = ''
+
 @description('PageSpeed Insights key for the cloud Lighthouse fallback. Empty sends keyless requests, whose shared quota is often spent.')
 @secure()
 param pagespeedApiKey string = ''
@@ -232,6 +236,25 @@ var githubTokenEnvironment = empty(mercuryGithubToken)
       }
     ]
 
+// The worker alone calls a model, so the Ollama key goes to it alone.
+var ollamaSecret = empty(ollamaApiKey)
+  ? []
+  : [
+      {
+        name: 'ollama-api-key'
+        value: ollamaApiKey
+      }
+    ]
+
+var ollamaEnvironment = empty(ollamaApiKey)
+  ? []
+  : [
+      {
+        name: 'OLLAMA_API_KEY'
+        secretRef: 'ollama-api-key'
+      }
+    ]
+
 // The worker alone calls PageSpeed, so the PageSpeed key goes to it alone.
 // It pushes chore branches with the GitHub token, which the scheduler also
 // holds to read CI runs and lock files.
@@ -240,6 +263,7 @@ var workerSecrets = concat(
   configSecret,
   telegramTokenSecret,
   githubTokenSecret,
+  ollamaSecret,
   empty(pagespeedApiKey)
     ? []
     : [
@@ -421,7 +445,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'OTEL_SERVICE_NAME'
               value: '${name}-worker'
             }
-          ], modelEnvironment, workerCheckEnvironment, configEnvironment, telegramTokenEnvironment, githubTokenEnvironment)
+          ], modelEnvironment, workerCheckEnvironment, configEnvironment, telegramTokenEnvironment, githubTokenEnvironment, ollamaEnvironment)
         }
       ]
       scale: {

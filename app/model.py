@@ -4,6 +4,7 @@ CI and the tests use the stub, so a push costs nothing and needs no key.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -112,3 +113,27 @@ class OpenAICompatibleModel:
         usage = getattr(response, "usage", None)
         tokens = (usage.prompt_tokens + usage.completion_tokens) if usage else 0
         return ModelReply(text=text, tokens=tokens)
+
+
+class FallbackModel:
+    """A run's model with a second provider behind it. The first call that
+    fails switches every later call to the fallback, and is re-raised, so the
+    retry the caller already does is what reaches the fallback. A step then
+    takes no longer than it did with one provider, which matters because the
+    lease is sized to one provider's retries."""
+
+    def __init__(self, primary: Model, fallback: Model, on_switch: Callable[[], None]) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._on_switch = on_switch
+        self.switched = False
+
+    def complete(self, system: str, prompt: str) -> ModelReply:
+        if self.switched:
+            return self._fallback.complete(system=system, prompt=prompt)
+        try:
+            return self._primary.complete(system=system, prompt=prompt)
+        except Exception:
+            self.switched = True
+            self._on_switch()
+            raise

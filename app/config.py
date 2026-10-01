@@ -33,9 +33,10 @@ class ProviderConfig:
     usd_per_million_tokens: float = 0.0
 
 
-# Chosen per task type by the registry in app/tasks.py, not by MODEL. Both
-# entries reuse the env var names the deploy already has: MODEL_API_KEY for
-# Gemini's free tier key, ANTHROPIC_API_KEY for the Haiku 4.5 task types.
+# Chosen per task type by the registry in app/tasks.py, not by MODEL, which
+# also names the provider each type falls back to. MODEL_API_KEY is Gemini's
+# free tier key, OLLAMA_API_KEY is Ollama's cloud free tier, and
+# ANTHROPIC_API_KEY is for Haiku 4.5, which no type uses today.
 PROVIDERS: dict[str, ProviderConfig] = {
     "gemini": ProviderConfig(
         kind="openai_compatible",
@@ -43,6 +44,14 @@ PROVIDERS: dict[str, ProviderConfig] = {
         api_key_env="MODEL_API_KEY",
         model="gemini-3.5-flash-lite",
         # The free tier.
+        usd_per_million_tokens=0.0,
+    ),
+    "ollama": ProviderConfig(
+        kind="openai_compatible",
+        base_url="https://ollama.com/v1",
+        api_key_env="OLLAMA_API_KEY",
+        model="gpt-oss:120b",
+        # The free tier, one request at a time, which the single worker keeps to.
         usd_per_million_tokens=0.0,
     ),
     "haiku": ProviderConfig(

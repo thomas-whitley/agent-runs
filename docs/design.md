@@ -57,7 +57,9 @@ A small corpus of Python reference notes is loaded into `chunks` at startup. Whe
 
 The loop talks to a `Model` protocol with one `complete` method. `MODEL=stub` runs offline and is what CI uses, so a push costs nothing.
 
-As of Mercury step 1, the provider is chosen per task type rather than by `MODEL`. `app/tasks.py` names each type's provider; `PROVIDERS` in `app/config.py` maps that name to its kind (an OpenAI compatible endpoint or the Anthropic SDK), its base URL, its model, and the env var holding its key. `pytest` uses `gemini`, keyed by `MODEL_API_KEY`; `haiku`, keyed by `ANTHROPIC_API_KEY`, is registered for the task types later Mercury steps add. A run whose provider has no key configured is refused when the worker tries to build it, closing its stream with `status: refused`, the same path a run past the daily limit takes.
+As of Mercury step 1, the provider is chosen per task type rather than by `MODEL`. `app/tasks.py` names each type's provider; `PROVIDERS` in `app/config.py` maps that name to its kind (an OpenAI compatible endpoint or the Anthropic SDK), its base URL, its model, and the env var holding its key. `pytest` uses `gemini`, keyed by `MODEL_API_KEY`; `haiku`, keyed by `ANTHROPIC_API_KEY`, is registered and no type names it. A run whose provider has no key configured is refused when the worker tries to build it, closing its stream with `status: refused`, the same path a run past the daily limit takes.
+
+Each type also names a fallback provider. `chat` runs on `ollama` (`gpt-oss:120b` on Ollama's cloud free tier, keyed by `OLLAMA_API_KEY`) and falls back to `gemini`, and the Gemini types fall back to `ollama`. The first call that fails switches the run to the fallback for every later call, and is re-raised, so the retry the loop already makes is what reaches the fallback. A step therefore takes no longer than it did with one provider, which keeps it inside the lease. The run's `provider` column is updated to the fallback when it takes over.
 
 ## Guards
 

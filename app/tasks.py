@@ -16,6 +16,8 @@ class TaskType:
     provider: str | None
     budget_tokens: int
     public: bool = False
+    # Takes over a run whose provider fails (app/model.py FallbackModel).
+    fallback: str | None = None
 
 
 _CHAT_TOOLS = (
@@ -26,11 +28,15 @@ _CHAT_TOOLS = (
 )
 
 _TYPES = (
-    TaskType(name="pytest", tools=(), provider="gemini", budget_tokens=50_000),
-    TaskType(name="chat", tools=_CHAT_TOOLS, provider="gemini", budget_tokens=20_000),
-    TaskType(name="repo_chore", tools=(), provider="gemini", budget_tokens=50_000),
+    TaskType(name="pytest", tools=(), provider="gemini", budget_tokens=50_000, fallback="ollama"),
+    TaskType(
+        name="chat", tools=_CHAT_TOOLS, provider="ollama", budget_tokens=20_000, fallback="gemini"
+    ),
+    TaskType(
+        name="repo_chore", tools=(), provider="gemini", budget_tokens=50_000, fallback="ollama"
+    ),
     TaskType(name="site_check", tools=(), provider=None, budget_tokens=0),
-    TaskType(name="digest", tools=(), provider="gemini", budget_tokens=20_000),
+    TaskType(name="digest", tools=(), provider="gemini", budget_tokens=20_000, fallback="ollama"),
 )
 
 TASK_TYPES: dict[str, TaskType] = {task_type.name: task_type for task_type in _TYPES}

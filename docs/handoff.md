@@ -72,6 +72,21 @@ back because the user had a job interview demo on the live page that afternoon.
   no row for "Two task types run on two providers in one deploy", one of the eight
   in `docs/mercury.md`, and 6d needs it.
 
+## Ollama as a second provider (2026-10-01), not deployed
+
+Both live chat runs had ended in error on Gemini 503s ("high demand"), so the user
+chose Ollama's cloud free tier. `ollama` is `gpt-oss:120b` at
+`https://ollama.com/v1`, keyed by `OLLAMA_API_KEY`, which is in `.env` and in
+`mercury-config`'s Actions secrets (set 2026-10-01 03:07 UTC). chat runs on it and
+falls back to gemini, and the Gemini types fall back to it (`FallbackModel` in
+`app/model.py`, wired in `app/worker.py` `_with_fallback`). The first failure
+switches the run and updates `runs.provider`. `infra/main.bicep` gives the key to
+the worker alone, and **`mercury-config`'s `deploy.yml` needs the
+`OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}` line** that
+`config/private-repo/deploy.yml` now has, at the same deploy as the `PUBLIC_SHA`
+bump. Once deployed, chat runs on ollama and the rest on gemini make the README
+claim "Two task types run on two providers in one deploy" provable from run rows.
+
 ## Step 4a to 4d are done (2026-09-30), 4e is next
 
 Local commits `ba23efd` (4a), `9faaf18` (4b), `93eea9d` (4c), `27e152c` (git in the

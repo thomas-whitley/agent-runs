@@ -26,13 +26,13 @@ from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
 from app.mercury_config import MercuryConfig, RepoConfig, load_mercury_config
 from app.migrations import apply_migrations
-from app.model import Model, StubModel
+from app.model import FallbackModel, Model, StubModel
 from app.pagespeed import run_pagespeed
 from app.progress import push_progress
 from app.repo_chore import ChoreSetup, run_repo_chore
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, finish_run, heartbeat, record_step
-from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES
+from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES, TaskType
 from app.telegram import TelegramClient, TelegramError, telegram_client
 from app.telemetry import configure_telemetry
 
@@ -297,6 +297,7 @@ def _process_run(
         )
         refuse_run(conn, run_id, str(error))
         return None
+    model = _with_fallback(conn, run_id, model, task_type, settings, model_builder)
 
     if task_type_name == "repo_chore":
         return _run_chore(conn, run_id, model, settings, repos, telegram, task_type.budget_tokens)
@@ -380,6 +381,40 @@ def _offer_open_anyway(
         ask(conn, telegram, chat_id, "open_anyway", text, run_id=run_id)
     except TelegramError as error:
         logger.error("could not offer open it anyway: %s", error, extra={"run_id": run_id})
+
+
+def _with_fallback(
+    conn: psycopg.Connection,
+    run_id: str,
+    model: Model,
+    task_type: TaskType,
+    settings: Settings,
+    model_builder: Callable[[Settings, str], Model],
+) -> Model:
+    """The run's model, with its type's fallback provider behind it when that
+    provider has credentials. When the fallback takes over, the run's provider
+    column names it, so the runs list and the daily token cap count the
+    provider that answered."""
+    if task_type.fallback is None:
+        return model
+    fields = {"run_id": run_id, "worker_id": settings.worker_id}
+    try:
+        fallback = model_builder(settings, task_type.fallback)
+    except RuntimeError as error:
+        logger.warning("run %s has no fallback: %s", run_id, error, extra=fields)
+        return model
+
+    def switch() -> None:
+        logger.warning(
+            "run %s: %s failed, falling back to %s",
+            run_id,
+            task_type.provider,
+            task_type.fallback,
+            extra=fields,
+        )
+        conn.execute("UPDATE runs SET provider = %s WHERE id = %s", (task_type.fallback, run_id))
+
+    return FallbackModel(model, fallback, on_switch=switch)
 
 
 def end_on_budget(conn: psycopg.Connection, run_id: str, trip: BudgetTrip) -> None:

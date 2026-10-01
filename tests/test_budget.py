@@ -5,6 +5,7 @@ with one event and sends one Telegram message to the owner's chat."""
 import pytest
 
 from app.budget import BudgetTrip, check_budget
+from app.tasks import TASK_TYPES
 from app.worker import claim_next_run, process_run
 from tests.test_worker import PASSING_TEST, settings_with, stub_model_builder
 
@@ -116,7 +117,7 @@ def test_a_tripped_run_ends_with_one_event_and_one_message(migrated_db, fake_tel
 
 
 def test_a_chat_run_is_held_to_the_caps_too(migrated_db, fake_telegram):
-    spend(migrated_db, "gemini", 500_000)
+    spend(migrated_db, TASK_TYPES["chat"].provider, 500_000)
     run_id = new_run(migrated_db, type_="chat", telegram=True)
 
     run(migrated_db, run_id, fake_telegram)
