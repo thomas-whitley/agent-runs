@@ -1,8 +1,9 @@
 """A fake of the GitHub REST calls Mercury makes, on a real local socket:
 list the open pull requests for a head branch and open one (a repo chore),
-and read a repo's default branch and its completed workflow runs (the CI
-watch). It records every call and the Authorization header each carried.
-Point GITHUB_API_URL at `url` to use it.
+read a repo's default branch and its completed workflow runs (the CI
+watch), and list a repo's files and read one raw (the dependency audit). It
+records every call and the Authorization header each carried. Point
+GITHUB_API_URL at `url` to use it.
 """
 
 import json
@@ -20,6 +21,8 @@ class FakeGitHub:
         self.repos: dict[str, str] = {}
         # Each has repo, name, head_branch, conclusion, and optionally id.
         self.workflow_runs: list[dict] = []
+        # owner/name to {path: text}, for the tree and raw content calls.
+        self.files: dict[str, dict[str, str]] = {}
         self.status_override: int | None = None
         self._lock = threading.Lock()
         fake = self
@@ -35,6 +38,12 @@ class FakeGitHub:
 
             def do_GET(self) -> None:  # noqa: N802 - http.server's name
                 status, body = fake._answer("GET", self.path, {}, self.headers)
+                if isinstance(body, bytes):
+                    self.send_response(status)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self._reply(status, body)
 
             def do_POST(self) -> None:  # noqa: N802
@@ -58,8 +67,9 @@ class FakeGitHub:
                 return self.status_override, {"message": "overridden"}
             parts = urlsplit(path)
             segments = parts.path.strip("/").split("/")
-            if method == "GET" and segments[0] == "repos" and len(segments) in (3, 5):
-                return self._read_repo(segments, parse_qs(parts.query))
+            reads_repo = len(segments) >= 3 and segments[3:4] != ["pulls"]
+            if method == "GET" and segments[0] == "repos" and reads_repo:
+                return self._read_repo(segments, parse_qs(parts.query), headers)
             # /repos/{owner}/{name}/pulls
             if len(segments) != 4 or segments[0] != "repos" or segments[3] != "pulls":
                 return 404, {"message": "Not Found"}
@@ -83,12 +93,21 @@ class FakeGitHub:
             self.pulls.append(pull)
             return 201, pull
 
-    def _read_repo(self, segments: list[str], query: dict) -> tuple[int, object]:
+    def _read_repo(self, segments: list[str], query: dict, headers) -> tuple[int, object]:
         repo = f"{segments[1]}/{segments[2]}"
         if repo not in self.repos:
             return 404, {"message": "Not Found"}
         if len(segments) == 3:
             return 200, {"full_name": repo, "default_branch": self.repos[repo]}
+        files = self.files.get(repo, {})
+        if segments[3:5] == ["git", "trees"]:
+            tree = [{"path": path, "type": "blob"} for path in files]
+            return 200, {"tree": tree, "truncated": False}
+        if segments[3] == "contents":
+            path = "/".join(segments[4:])
+            if path not in files or headers.get("Accept") != "application/vnd.github.raw+json":
+                return 404, {"message": "Not Found"}
+            return 200, files[path].encode()
         if segments[3:] != ["actions", "runs"]:
             return 404, {"message": "Not Found"}
         branch = query.get("branch", [None])[0]

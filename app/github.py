@@ -1,6 +1,7 @@
 """The GitHub REST calls Mercury makes, with the token as a header. A repo
 chore lists and opens pull requests. The CI watch reads a repo's default
-branch and its completed workflow runs.
+branch and its completed workflow runs. The dependency audit lists a repo's
+files and reads its lock files.
 """
 
 import json
@@ -43,8 +44,17 @@ class GitHubClient:
         )
         return self._call("GET", path)["workflow_runs"]
 
-    def _call(self, method: str, path: str, payload: dict | None = None):
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": "mercury"}
+    def file_paths(self, repo: str, ref: str) -> list[str]:
+        """Every file in the repo at ref."""
+        tree = self._call("GET", f"/repos/{repo}/git/trees/{quote(ref)}?recursive=1")["tree"]
+        return [entry["path"] for entry in tree if entry["type"] == "blob"]
+
+    def raw_file(self, repo: str, path: str, ref: str) -> str:
+        return self._call("GET", f"/repos/{repo}/contents/{quote(path)}?ref={quote(ref)}", raw=True)
+
+    def _call(self, method: str, path: str, payload: dict | None = None, raw: bool = False):
+        accept = "application/vnd.github.raw+json" if raw else "application/vnd.github+json"
+        headers = {"Accept": accept, "User-Agent": "mercury"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         request = urllib.request.Request(
@@ -55,7 +65,8 @@ class GitHubClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=GITHUB_TIMEOUT_SECONDS) as response:
-                return json.loads(response.read())
+                body = response.read()
+                return body.decode() if raw else json.loads(body)
         except urllib.error.HTTPError as error:
             raise GitHubError(f"GitHub {method} {path.split('?')[0]}: HTTP {error.code}") from None
         except (OSError, ValueError) as error:

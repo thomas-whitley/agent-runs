@@ -8,7 +8,8 @@ no separate worker, and the agent loop worker never claims uptime runs (see
 _CLAIMABLE in app/worker.py).
 
 The CI watch works the same way, one ci_watch run per configured repo,
-read from the GitHub Actions API.
+read from the GitHub Actions API, and so does the weekly dependency audit
+(app/audit.py).
 
 The weekly lighthouse and broken_links checks are only created here. The
 self hosted checks worker claims them, and a lighthouse check nobody claims
@@ -23,6 +24,7 @@ import psycopg
 from opentelemetry import trace
 
 from app.approvals import ask, expire_due
+from app.audit import OSVClient, OSVError, audit_repo
 from app.checks import check_site
 from app.cleanup import run_cleanup
 from app.config import load_settings
@@ -335,6 +337,65 @@ def _announce_ci_failure(
     return True
 
 
+def audit_dependencies(
+    conn: psycopg.Connection,
+    repos: tuple[str, ...],
+    api_base_url: str,
+    bearer_token: str,
+    github: GitHubClient,
+    osv: OSVClient,
+    *,
+    telegram: TelegramClient | None = None,
+    chat_id: int | None = None,
+) -> list[str]:
+    """Create and close a dependency_audit check for every repo that has not
+    had one this week. Findings go in the digest only. A GitHub or OSV call
+    that fails counts towards suspending the audit, and Telegram hears only
+    of that. Returns the ids of the runs created."""
+    created: list[str] = []
+
+    for repo in repos:
+        schedule_name = f"dependency_audit:{repo}"
+        if is_suspended(conn, schedule_name):
+            logger.info("skipping %s: schedule suspended", schedule_name)
+            continue
+        recent = conn.execute(
+            _LAST_CHECK_IS_RECENT, ("dependency_audit", repo, WEEKLY_INTERVAL)
+        ).fetchone()[0]
+        if recent:
+            continue
+        what = f"The dependency audit for {repo}"
+        try:
+            run_id = _create_run(api_base_url, bearer_token, repo, kind="dependency_audit")
+        except OSError:
+            logger.exception("could not create a dependency_audit run for %s", repo)
+            _fail(conn, schedule_name, what, telegram, chat_id)
+            continue
+        created.append(run_id)
+
+        try:
+            finding = audit_repo(github, osv, repo)
+        except (GitHubError, OSVError, ValueError) as error:
+            # ValueError is a lock file that would not parse.
+            logger.error("dependency_audit %s: %s", run_id, error, extra={"run_id": run_id})
+            _close_check(conn, run_id, {"repo": repo, "error": str(error)}, "failed")
+            _fail(conn, schedule_name, what, telegram, chat_id)
+            continue
+
+        _close_check(conn, run_id, finding, "succeeded")
+        record_success(conn, schedule_name)
+        logger.info(
+            "dependency_audit %s: %s vulnerable package(s) in %s lock file(s) of %s",
+            run_id,
+            finding["vulnerable_count"],
+            len(finding["lock_files"]),
+            repo,
+            extra={"run_id": run_id},
+        )
+
+    return created
+
+
 def _close_check(conn: psycopg.Connection, run_id: str, finding: dict, status: str) -> None:
     """The finding as step 1 and a done event as step 2, the shape a posted
     check result has, so the run's stream ends."""
@@ -369,12 +430,24 @@ def main() -> None:  # pragma: no cover - the process entry point
         created += schedule_weekly_checks(
             conn, config.pages, settings.api_base_url, settings.mercury_bearer_token
         )
+        repos = tuple(repo.name for repo in config.repos)
+        github = GitHubClient(settings.mercury_github_token, settings.github_api_url)
         created += watch_ci(
             conn,
-            tuple(repo.name for repo in config.repos),
+            repos,
             settings.api_base_url,
             settings.mercury_bearer_token,
-            GitHubClient(settings.mercury_github_token, settings.github_api_url),
+            github,
+            telegram=telegram,
+            chat_id=config.telegram_chat_id,
+        )
+        created += audit_dependencies(
+            conn,
+            repos,
+            settings.api_base_url,
+            settings.mercury_bearer_token,
+            github,
+            OSVClient(settings.osv_api_url),
             telegram=telegram,
             chat_id=config.telegram_chat_id,
         )
