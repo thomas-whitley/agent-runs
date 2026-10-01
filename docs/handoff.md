@@ -93,6 +93,16 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
 - **Deployed.** `mercury-config` `922cccd` lists the fixture in `mercury.yaml`,
   passes `MERCURY_GITHUB_TOKEN` to the deploy, and pins `PUBLIC_SHA` at `66c0000`.
   `d19cfb9` added the Logs workflow. Step 5 is next.
+- **6c brought forward (2026-10-01), for a job interview demo that afternoon.**
+  No task type is public since `9936eb9`, so the brief's "bodies for public types"
+  would have shown nothing. The user chose: with no Authorization header,
+  `/runs/{id}/events` streams `{seq, kind}` and the done status, bodies stripped;
+  a wrong token is still 401 (`76671f0`). `?after=` resumes like `Last-Event-ID`.
+  The page is `#/runs/<id>` with Kill connection and Reconnect (`5cc3c80`). Also
+  `a17becd` sets the `azure` logger to WARNING, and `0c4c537` closes uptime runs
+  left pending and unclaimed for 10 minutes (the 21:00 orphan was the ingress
+  dropping the POST with `RemoteDisconnected` and delivering it later). All
+  deployed as `0c4c537` (`mercury-config` `8d0e5f1`).
 - **A second session shared this working copy on 2026-09-30.** It was making
   `pytest` runs require the bearer token and editing README, `docs/mercury.md`,
   the Publish workflow and several tests. Both sessions running pytest at once
