@@ -30,6 +30,8 @@ The API serves a built page from `web/dist` at `/`. It is registered after every
 
 Each run id links to `#/runs/<id>`, which streams that run's events as they land. A Kill connection button closes the stream the way a dropped network would, and Reconnect opens a new one from the last event seen, with a marker row where the drop happened. The browser holds no token, so the page gets step numbers, kinds and the final status, and never the code, test output or diffs inside them, which need the bearer token. A browser `EventSource` cannot set `Last-Event-ID` on a new connection, so the page resumes with `?after=<id>`, and the header wins when both are sent. `useRunStream` merges events by id, so a row the server sends twice shows once, and it closes the stream on `done` so the browser does not keep reconnecting. `web/test/run-stream.test.tsx` covers the merge on reconnect, the duplicate id and the close on done against a fake `EventSource`, and `tests/test_events_without_token.py` covers the API side.
 
+On the live deploy on 2026-10-01, run `ff9e0edd` was opened on the page and the connection killed after event #235, the retrieve step. The worker carried on with nobody listening. Reconnect, 62.3 seconds later, asked for everything after #235 and got #236 act, #237 verify and #238 done, once each, ending `succeeded`, with the drop marked between #235 and #236.
+
 ## Claims and their proof
 
 | Claim | Test | Status |
@@ -45,6 +47,7 @@ Each run id links to `#/runs/<id>`, which streams that run's events as they land
 | A budget trip ends a run with one event and one message | `tests/test_budget.py`, against the fake Telegram in `tests/telegram_fake.py` | green |
 | The webhook cold start is measured and stated | `tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent`, and the live log line below | green, 19.0 s from zero replicas |
 | A Telegram message opens a PR on a named repo | `tests/test_repo_chore_github.py`, against the real `thomas-whitley/mercury-fixture` | green when run with a GitHub token, output below. CI has no token, so it skips there |
+| A dropped browser stream resumes from the last event without duplicating rows | `web/test/run-stream.test.tsx` against a fake `EventSource`, `tests/test_events_without_token.py`, and the live page below | green |
 
 ## Resume, and the test that proves it
 
