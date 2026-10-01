@@ -37,6 +37,31 @@ logger = logging.getLogger("agent_runs.scheduler")
 # to cover a cold start, not only a request. The Job's replicaTimeout is 300.
 CREATE_RUN_TIMEOUT_SECONDS = 60.0
 
+# The ingress can drop the scheduler's POST while the api cold starts and
+# then deliver it, so the api writes a run the scheduler never heard about,
+# and it stays pending with nobody to close it. Each hourly run closes any
+# uptime run left pending and unclaimed this long. Uptime runs are never
+# claimed by a worker, so nothing else would.
+_CLOSE_ORPHANED_UPTIME_RUNS = """
+SELECT id::text FROM runs
+WHERE type = 'site_check' AND coalesce(check_kind, 'uptime') = 'uptime'
+  AND finished_at IS NULL AND claimed_by IS NULL
+  AND created_at < now() - interval '10 minutes'
+"""
+ORPHAN_REASON = (
+    "the scheduler's request to create this run failed, so the scheduler never checked the site"
+)
+
+
+def close_orphaned_uptime_runs(conn: psycopg.Connection) -> list[str]:
+    orphans = [row[0] for row in conn.execute(_CLOSE_ORPHANED_UPTIME_RUNS)]
+    for run_id in orphans:
+        record_step(conn, run_id, 1, "done", output={"status": "error", "reason": ORPHAN_REASON})
+        finish_run(conn, run_id, "error", 0)
+        logger.warning("closed orphaned uptime run %s", run_id, extra={"run_id": run_id})
+    return orphans
+
+
 # A weekly check is due when none of its kind for its page was created in
 # this long. Counting from the last one, rather than reading a cron day,
 # means an hourly Job that missed its slot catches up on the next run.
@@ -87,6 +112,7 @@ def run_due_checks(
     Telegram client and chat, the failure that suspends a site sends one
     message with a Resume button."""
     created: list[str] = []
+    close_orphaned_uptime_runs(conn)
 
     for url in sites:
         schedule_name = f"site_uptime:{url}"

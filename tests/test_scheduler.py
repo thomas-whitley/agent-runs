@@ -191,3 +191,56 @@ def test_schedule_weekly_checks_logs_and_carries_on_when_the_api_refuses(
 
     assert created == []
     assert _checks(migrated_db) == []
+
+
+def _orphan(conn, minutes_old: int, kind: str | None = None, claimed: bool = False) -> str:
+    """A site_check row the API wrote after the scheduler's POST had given up."""
+    return str(
+        conn.execute(
+            "INSERT INTO runs (task, type, check_kind, claimed_by, created_at) "
+            "VALUES ('https://example.com/health', 'site_check', %s, %s, "
+            "now() - make_interval(mins => %s)) RETURNING id",
+            (kind, "worker-1" if claimed else None, minutes_old),
+        ).fetchone()[0]
+    )
+
+
+def test_an_orphaned_uptime_run_is_closed_as_an_error_with_its_reason(
+    start_server, migrated_db, monkeypatch
+):
+    """On 2026-09-30 at 21:00 the ingress dropped the scheduler's POST while
+    the api cold started, then delivered it. The row it wrote stayed pending
+    with nobody to close it."""
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", BEARER_TOKEN)
+    base_url = start_server()
+    orphan = _orphan(migrated_db, minutes_old=60)
+
+    run_due_checks(migrated_db, (), base_url, BEARER_TOKEN)
+
+    status, finished = migrated_db.execute(
+        "SELECT status, finished_at IS NOT NULL FROM runs WHERE id = %s", (orphan,)
+    ).fetchone()
+    done = migrated_db.execute(
+        "SELECT payload FROM events WHERE run_id = %s AND payload->>'kind' = 'done'", (orphan,)
+    ).fetchone()[0]
+    assert (status, finished) == ("error", True)
+    assert done["output"]["status"] == "error"
+    assert "scheduler" in done["output"]["reason"]
+
+
+def test_a_recent_or_claimed_or_weekly_pending_check_is_left_alone(
+    start_server, migrated_db, monkeypatch
+):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", BEARER_TOKEN)
+    base_url = start_server()
+    recent = _orphan(migrated_db, minutes_old=2)
+    claimed = _orphan(migrated_db, minutes_old=60, claimed=True)
+    weekly = _orphan(migrated_db, minutes_old=60, kind="lighthouse")
+
+    run_due_checks(migrated_db, (), base_url, BEARER_TOKEN)
+
+    rows = migrated_db.execute(
+        "SELECT id::text, status FROM runs WHERE id = ANY(%s::uuid[])",
+        ([recent, claimed, weekly],),
+    ).fetchall()
+    assert {status for _, status in rows} == {"pending"}
