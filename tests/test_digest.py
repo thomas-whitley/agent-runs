@@ -161,7 +161,14 @@ def test_the_facts_cover_the_last_day_and_the_latest_weekly_checks(migrated_db):
     facts = gather_facts(migrated_db)
 
     assert facts["uptime"] == [
-        {"site": SITE, "checks": 4, "failed": 1, "slowest_ms": 300, "last_status_code": 200}
+        {
+            "site": SITE,
+            "checks": 4,
+            "failed": 1,
+            "not_checked": 0,
+            "slowest_ms": 300,
+            "last_status_code": 200,
+        }
     ]
     [main_page, other_page] = sorted(facts["lighthouse"], key=lambda f: f["page"])
     assert main_page["scores"] == {"performance": 0.95}
@@ -222,6 +229,32 @@ def test_uptime_latency_is_stored_as_a_float_and_the_facts_round_it(migrated_db)
     [site] = gather_facts(migrated_db)["uptime"]
 
     assert site["slowest_ms"] == 84
+
+
+def test_a_run_closed_without_checking_the_site_is_not_counted_as_a_failure(migrated_db):
+    """On 2026-10-01 the first live digest said a site failed when its run was
+    an orphan the scheduler closed as an error, with no check ever made."""
+    from app.scheduler import ORPHAN_REASON
+
+    _check(
+        migrated_db,
+        "uptime",
+        SITE,
+        {"status_code": 200, "latency_ms": 90.5, "passed": True, "error": None},
+    )
+    orphan = migrated_db.execute(
+        "INSERT INTO runs (task, type, check_kind) VALUES (%s, 'site_check', 'uptime')"
+        " RETURNING id::text",
+        (SITE,),
+    ).fetchone()[0]
+    record_step(migrated_db, orphan, 1, "done", output={"status": "error", "reason": ORPHAN_REASON})
+    finish_run(migrated_db, orphan, "error", 0)
+
+    facts = gather_facts(migrated_db)
+
+    [site] = facts["uptime"]
+    assert (site["checks"], site["failed"], site["not_checked"]) == (1, 0, 1)
+    assert "1 run closed without checking" in render_facts(facts)
 
 
 def test_with_nothing_checked_the_facts_are_empty_and_still_render(migrated_db):

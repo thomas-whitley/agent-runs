@@ -39,10 +39,17 @@ check, a Lighthouse score that dropped since the previous run, broken links, fai
 vulnerable dependencies, a suspended schedule, a check that errored. Then say in one line \
 what was fine. Plain text, no markdown, at most 1,200 characters."""
 
+# A run counts as a check only when step 1 holds a check's result. One the
+# scheduler closed as an orphan never checked the site, so it is counted as
+# not checked rather than as the site failing.
 _UPTIME = """
-SELECT r.task, count(*), count(*) FILTER (WHERE r.status <> 'succeeded'),
+SELECT r.task,
+       count(*) FILTER (WHERE s.output ? 'passed'),
+       count(*) FILTER (WHERE (s.output ->> 'passed')::boolean IS FALSE),
+       count(*) FILTER (WHERE s.output IS NULL OR NOT s.output ? 'passed'),
        round(max((s.output ->> 'latency_ms')::numeric))::int,
-       (array_agg((s.output ->> 'status_code')::int ORDER BY r.created_at DESC))[1]
+       (array_agg((s.output ->> 'status_code')::int ORDER BY r.created_at DESC)
+            FILTER (WHERE s.output ? 'passed'))[1]
 FROM runs r LEFT JOIN steps s ON s.run_id = r.id AND s.seq = 1
 WHERE r.type = 'site_check' AND coalesce(r.check_kind, 'uptime') = 'uptime'
   AND r.finished_at IS NOT NULL AND r.created_at > now() - %s::interval
@@ -91,10 +98,11 @@ def gather_facts(conn: psycopg.Connection) -> dict:
             "site": site,
             "checks": checks,
             "failed": failed,
+            "not_checked": not_checked,
             "slowest_ms": slowest,
             "last_status_code": last_status,
         }
-        for site, checks, failed, slowest, last_status in conn.execute(_UPTIME, (DAY,))
+        for site, checks, failed, not_checked, slowest, last_status in conn.execute(_UPTIME, (DAY,))
     ]
 
     lighthouse = []
@@ -193,6 +201,12 @@ def render_facts(facts: dict) -> str:
         lines.append(
             f"Uptime {site['site']}: {site['failed']} of {site['checks']} checks failed, "
             f"slowest {site['slowest_ms']} ms, last status {site['last_status_code']}."
+            + (
+                f" {site['not_checked']} run{'s' if site['not_checked'] > 1 else ''}"
+                " closed without checking the site."
+                if site["not_checked"]
+                else ""
+            )
         )
     for page in facts["lighthouse"]:
         if "error" in page:
