@@ -73,7 +73,7 @@ export function RunsList({ fetchPage, pageSize }: { fetchPage: FetchPage; pageSi
             {runs.map((run) => (
               <tr key={run.id} data-testid="run-row" data-run-id={run.id}>
                 <td className="mono" title={run.id}>
-                  {run.id.slice(0, 8)}
+                  <a href={`#/runs/${run.id}`}>{run.id.slice(0, 8)}</a>
                 </td>
                 <td>{formatCreated(run.created_at)}</td>
                 <td>{run.type}</td>

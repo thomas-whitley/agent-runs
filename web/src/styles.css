@@ -113,3 +113,23 @@ button {
 button:hover {
   border-color: var(--muted);
 }
+
+a {
+  color: inherit;
+}
+
+h2 {
+  margin: 8px 0 4px;
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  font-weight: 600;
+}
+
+.drop td {
+  color: var(--bad);
+  font-size: 0.9rem;
+  white-space: normal;
+}
