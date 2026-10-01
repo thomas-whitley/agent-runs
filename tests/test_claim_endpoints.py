@@ -83,7 +83,8 @@ def test_claim_refuses_every_type_except_a_declared_site_check(api, clean_db):
     credential than a session's, by construction."""
     for type_ in ("pytest", "chat", "repo_chore", "digest"):
         insert_run(clean_db, type_=type_, kind=None)
-    insert_run(clean_db, kind="uptime")
+    for kind in ("uptime", "ci_watch", "dependency_audit"):
+        insert_run(clean_db, kind=kind)
 
     response = claim(api, BOTH_KINDS)
 
@@ -93,10 +94,11 @@ def test_claim_refuses_every_type_except_a_declared_site_check(api, clean_db):
     assert claimed == (0,)
 
 
-def test_claim_refuses_a_worker_that_declares_uptime(api, clean_db):
-    insert_run(clean_db, kind="uptime")
+@pytest.mark.parametrize("kind", ["uptime", "ci_watch", "dependency_audit"])
+def test_claim_refuses_a_worker_that_declares_a_scheduler_kind(api, clean_db, kind):
+    insert_run(clean_db, kind=kind)
 
-    response = claim(api, ["uptime"])
+    response = claim(api, [kind])
 
     assert response.status_code == 422
 

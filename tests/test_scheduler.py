@@ -244,3 +244,14 @@ def test_a_recent_or_claimed_or_weekly_pending_check_is_left_alone(
         ([recent, claimed, weekly],),
     ).fetchall()
     assert {status for _, status in rows} == {"pending"}
+
+
+def test_an_orphaned_ci_watch_run_is_closed_too(start_server, migrated_db, monkeypatch):
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", BEARER_TOKEN)
+    base_url = start_server()
+    orphan = _orphan(migrated_db, minutes_old=60, kind="ci_watch")
+
+    run_due_checks(migrated_db, (), base_url, BEARER_TOKEN)
+
+    status = migrated_db.execute("SELECT status FROM runs WHERE id = %s", (orphan,)).fetchone()
+    assert status == ("error",)

@@ -31,14 +31,13 @@ import signal
 import subprocess
 import tempfile
 import threading
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import psycopg
 
+from app.github import GitHubClient, GitHubError
 from app.loop import (
     DEFAULT_MODEL_RETRY_ATTEMPTS,
     DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
@@ -59,7 +58,6 @@ MAX_OUTPUT_CHARS = 4_000
 MAX_DIFF_CHARS = 20_000
 HEARTBEAT_SECONDS = 30.0
 GIT_TIMEOUT_SECONDS = 120.0
-GITHUB_TIMEOUT_SECONDS = 20.0
 AUTHOR = ("mercury", "mercury@users.noreply.github.com")
 # Created in the Dockerfile. The test command runs as this user when the
 # worker is root, as it is in the image.
@@ -75,45 +73,6 @@ class ChoreError(Exception):
 
 class LostLease(Exception):
     """Another worker owns the run now, so this one stops writing."""
-
-
-class GitHubClient:
-    """The two pull request calls a chore makes, with the token as a header."""
-
-    def __init__(self, token: str | None, api_url: str = "https://api.github.com") -> None:
-        self._token = token
-        self._api_url = api_url.rstrip("/")
-
-    def find_pull(self, repo: str, branch: str) -> str | None:
-        owner = repo.split("/", 1)[0]
-        pulls = self._call("GET", f"/repos/{repo}/pulls?state=open&head={owner}:{branch}")
-        return pulls[0]["html_url"] if pulls else None
-
-    def open_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
-        pull = self._call(
-            "POST",
-            f"/repos/{repo}/pulls",
-            {"title": title, "head": branch, "base": base, "body": body},
-        )
-        return pull["html_url"]
-
-    def _call(self, method: str, path: str, payload: dict | None = None):
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": "mercury"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
-        request = urllib.request.Request(
-            f"{self._api_url}{path}",
-            data=json.dumps(payload).encode() if payload is not None else None,
-            method=method,
-            headers=headers,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=GITHUB_TIMEOUT_SECONDS) as response:
-                return json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            raise ChoreError(f"GitHub {method} {path.split('?')[0]}: HTTP {error.code}") from None
-        except (OSError, ValueError) as error:
-            raise ChoreError(f"GitHub {method}: {type(error).__name__}") from None
 
 
 @dataclass(frozen=True)
@@ -195,7 +154,7 @@ def run_repo_chore(
         # The model never answered, after its retries.
         logger.error("repo chore %s: %s", run_id, error, extra=fields)
         return close("error", {"reason": "the model did not answer"})
-    except ChoreError as error:
+    except (ChoreError, GitHubError) as error:
         logger.error("repo chore %s: %s", run_id, error, extra=fields)
         return close("error", {"reason": str(error)})
     finally:

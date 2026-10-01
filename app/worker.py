@@ -20,6 +20,7 @@ from app.config import (
     load_settings,
 )
 from app.corpus import load_corpus
+from app.github import GitHubClient
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
 from app.mercury_config import MercuryConfig, RepoConfig, load_mercury_config
@@ -27,7 +28,7 @@ from app.migrations import apply_migrations
 from app.model import Model, StubModel
 from app.pagespeed import run_pagespeed
 from app.progress import push_progress
-from app.repo_chore import ChoreSetup, GitHubClient, run_repo_chore
+from app.repo_chore import ChoreSetup, run_repo_chore
 from app.retrieval import Retriever, build_retriever, index_corpus
 from app.runs import claim_run, finish_run, heartbeat, record_step
 from app.tasks import CLOUD_FALLBACK_CHECK_KINDS, TASK_TYPES

@@ -35,12 +35,16 @@ _TYPES = (
 
 TASK_TYPES: dict[str, TaskType] = {task_type.name: task_type for task_type in _TYPES}
 
-# The kinds a site_check can be. uptime is plain HTTP, run and closed by the
-# scheduler Job in the cloud. The other two need a browser, so only the self
-# hosted checks worker runs them, through the claim endpoints.
-CHECK_KINDS = ("uptime", "lighthouse", "broken_links")
-DEFAULT_CHECK_KIND = "uptime"
+# The kinds a site_check can be. The scheduler Job creates and closes its
+# own kinds in the cloud: uptime is plain HTTP against a site, ci_watch reads
+# a repo's workflow runs from GitHub, and dependency_audit reads a repo's lock
+# files. Neither worker claims them. lighthouse and broken_links need a
+# browser, so only the self hosted checks worker runs them, through the claim
+# endpoints.
+SCHEDULER_CHECK_KINDS = ("uptime", "ci_watch", "dependency_audit")
 SELF_HOSTED_CHECK_KINDS = ("lighthouse", "broken_links")
+CHECK_KINDS = SCHEDULER_CHECK_KINDS + SELF_HOSTED_CHECK_KINDS
+DEFAULT_CHECK_KIND = "uptime"
 # The kinds the cloud takes over when no self hosted worker claims them in the
 # window. PageSpeed Insights runs Lighthouse but cannot crawl, and the crawl
 # lives only in checks/, so broken_links waits for the self hosted worker.

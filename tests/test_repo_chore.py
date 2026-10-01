@@ -15,9 +15,10 @@ from pathlib import Path
 
 import pytest
 
+from app.github import GitHubClient
 from app.mercury_config import RepoConfig
 from app.model import StubModel
-from app.repo_chore import ChoreSetup, GitHubClient, run_repo_chore
+from app.repo_chore import ChoreSetup, run_repo_chore
 from app.runs import claim_run
 from tests.github_fake import FakeGitHub
 
