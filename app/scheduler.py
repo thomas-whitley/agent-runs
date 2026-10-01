@@ -9,7 +9,8 @@ _CLAIMABLE in app/worker.py).
 
 The CI watch works the same way, one ci_watch run per configured repo,
 read from the GitHub Actions API, and so does the weekly dependency audit
-(app/audit.py).
+(app/audit.py). Once a day it creates the digest run, which the worker
+writes and sends (app/digest.py).
 
 The weekly lighthouse and broken_links checks are only created here. The
 self hosted checks worker claims them, and a lighthouse check nobody claims
@@ -19,6 +20,8 @@ within the window falls back to PageSpeed on the Python worker.
 import json
 import logging
 import urllib.request
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 import psycopg
 from opentelemetry import trace
@@ -92,9 +95,10 @@ def _create_run(
     url: str,
     timeout_seconds: float = CREATE_RUN_TIMEOUT_SECONDS,
     kind: str | None = None,
+    run_type: str = "site_check",
 ) -> str:
     inputs = {"task": url} if kind is None else {"task": url, "kind": kind}
-    body = json.dumps({"type": "site_check", "inputs": inputs}).encode()
+    body = json.dumps({"type": run_type, "inputs": inputs}).encode()
     request = urllib.request.Request(
         f"{api_base_url}/runs",
         data=body,
@@ -396,6 +400,42 @@ def audit_dependencies(
     return created
 
 
+# The digest is due at this local time. The Job fires on the hour in UTC,
+# so the first tick after it, 08:00 local, creates it, whatever daylight
+# saving is doing.
+DIGEST_LOCAL_TIME = time(7, 30)
+
+_DIGEST_SINCE = "SELECT EXISTS (SELECT 1 FROM runs WHERE type = 'digest' AND created_at >= %s)"
+
+
+def schedule_digest(
+    conn: psycopg.Connection,
+    api_base_url: str,
+    bearer_token: str,
+    timezone: str,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Create today's digest run once it is due and none has been created
+    since today's due time. The worker writes and sends it. Returns the run
+    id, or None when nothing was created."""
+    zone = ZoneInfo(timezone)
+    local = (now or datetime.now(zone)).astimezone(zone)
+    due = datetime.combine(local.date(), DIGEST_LOCAL_TIME, tzinfo=zone)
+    if local < due or conn.execute(_DIGEST_SINCE, (due,)).fetchone()[0]:
+        return None
+    try:
+        run_id = _create_run(
+            api_base_url, bearer_token, local.date().isoformat(), run_type="digest"
+        )
+    except OSError:
+        # The next hourly tick tries again.
+        logger.exception("could not create the digest run")
+        return None
+    logger.info("scheduled the digest %s for %s", run_id, local.date(), extra={"run_id": run_id})
+    return run_id
+
+
 def _close_check(conn: psycopg.Connection, run_id: str, finding: dict, status: str) -> None:
     """The finding as step 1 and a done event as step 2, the shape a posted
     check result has, so the run's stream ends."""
@@ -451,6 +491,10 @@ def main() -> None:  # pragma: no cover - the process entry point
             telegram=telegram,
             chat_id=config.telegram_chat_id,
         )
+        digest = schedule_digest(
+            conn, settings.api_base_url, settings.mercury_bearer_token, config.timezone
+        )
+        created += [digest] if digest else []
         run_cleanup(conn, config.event_bodies_days, config.runs_days)
 
     logger.info("scheduler run complete, %s check(s) created", len(created))

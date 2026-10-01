@@ -1,8 +1,8 @@
 """Loads the parts of mercury.yaml that are read: the portfolio's sites,
 checked hourly for uptime, its pages, checked weekly with Lighthouse and the
 broken link crawl, its repos, which a repo_chore may touch, the one
-Telegram chat the bot answers, and the retention windows the cleanup
-applies. The full schema arrives with the steps that read the rest of it.
+Telegram chat the bot answers and its timezone, and the retention windows
+the cleanup applies. The full schema arrives with the steps that read the rest of it.
 """
 
 from dataclasses import dataclass
@@ -31,6 +31,8 @@ class MercuryConfig:
     telegram_chat_id: int | None = None
     repos: tuple[RepoConfig, ...] = ()
     event_bodies_days: int = EVENT_BODIES_DAYS
+    # The digest's local time is read in this zone.
+    timezone: str = "Australia/Melbourne"
     runs_days: int = RUNS_DAYS
 
 
@@ -39,7 +41,8 @@ def load_mercury_config(path: str | Path) -> MercuryConfig:
     which is what a scheduler started with no config mounted should do."""
     data = yaml.safe_load(Path(path).read_text()) or {}
     portfolio = data.get("portfolio") or {}
-    chat_id = (data.get("telegram") or {}).get("chat_id")
+    telegram = data.get("telegram") or {}
+    chat_id = telegram.get("chat_id")
     retention = data.get("retention") or {}
     return MercuryConfig(
         sites=tuple(portfolio.get("sites") or []),
@@ -48,6 +51,7 @@ def load_mercury_config(path: str | Path) -> MercuryConfig:
         repos=tuple(_repo(entry) for entry in portfolio.get("repos") or []),
         event_bodies_days=int(retention.get("event_bodies_days", EVENT_BODIES_DAYS)),
         runs_days=int(retention.get("runs_days", RUNS_DAYS)),
+        timezone=telegram.get("timezone") or "Australia/Melbourne",
     )
 
 

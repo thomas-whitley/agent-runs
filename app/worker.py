@@ -20,6 +20,7 @@ from app.config import (
     load_settings,
 )
 from app.corpus import load_corpus
+from app.digest import run_digest
 from app.github import GitHubClient
 from app.logging_setup import configure_logging
 from app.loop import LoopResult, run_agent_loop
@@ -41,7 +42,7 @@ logger = logging.getLogger("agent_runs.worker")
 # (app/chat.py). A site_check the worker takes over runs on PageSpeed in
 # run_cloud_check. Every other
 # registered type is refused, closing its stream, until its own step lands.
-_RUNNABLE_TYPES = {"pytest", "chat", "repo_chore"}
+_RUNNABLE_TYPES = {"pytest", "chat", "repo_chore", "digest"}
 
 # Unclaimed runs, and runs whose worker stopped reporting for longer than the
 # lease. The second case is a worker that was killed outright.
@@ -299,6 +300,12 @@ def _process_run(
 
     if task_type_name == "repo_chore":
         return _run_chore(conn, run_id, model, settings, repos, telegram, task_type.budget_tokens)
+
+    if task_type_name == "digest":
+        tokens = run_digest(
+            conn, run_id, model, telegram, owner_chat_id, worker_id=settings.worker_id
+        )
+        return LoopResult(status="succeeded", attempts=1, tokens_used=tokens)
 
     if task_type_name == "chat":
         tokens = run_chat(conn, run_id, model, telegram, worker_id=settings.worker_id, repos=repos)

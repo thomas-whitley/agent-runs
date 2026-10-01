@@ -87,3 +87,13 @@ def test_the_retention_windows_default_to_30_days_and_a_year(tmp_path):
     config = load_mercury_config(config_file)
 
     assert (config.event_bodies_days, config.runs_days) == (30, 365)
+
+
+def test_load_mercury_config_reads_the_timezone_and_defaults_to_melbourne(tmp_path):
+    config_file = tmp_path / "mercury.yaml"
+    config_file.write_text(yaml.dump({"telegram": {"timezone": "Europe/London"}}))
+    default_file = tmp_path / "default.yaml"
+    default_file.write_text(yaml.dump({"portfolio": {}}))
+
+    assert load_mercury_config(config_file).timezone == "Europe/London"
+    assert load_mercury_config(default_file).timezone == "Australia/Melbourne"
