@@ -42,7 +42,7 @@ param pagespeedApiKey string = ''
 @secure()
 param telegramBotToken string = ''
 
-@description('Fine grained GitHub token, contents and pull requests on the named repos. Only the worker holds it, for repo chores. Empty means a chore fails at its first push.')
+@description('Fine grained GitHub token, contents and pull requests on the named repos. The worker pushes repo chores with it, and the scheduler reads CI runs and lock files. Empty means a chore fails at its first push, and the scheduler reads GitHub unauthenticated.')
 @secure()
 param mercuryGithubToken string = ''
 
@@ -232,8 +232,9 @@ var githubTokenEnvironment = empty(mercuryGithubToken)
       }
     ]
 
-// The worker alone calls PageSpeed and pushes chore branches, so the
-// PageSpeed key and the GitHub token go to it alone.
+// The worker alone calls PageSpeed, so the PageSpeed key goes to it alone.
+// It pushes chore branches with the GitHub token, which the scheduler also
+// holds to read CI runs and lock files.
 var workerSecrets = concat(
   sharedSecrets,
   configSecret,
@@ -278,10 +279,11 @@ var leaseSeconds = 120
 // app/worker.py.
 var pendingWorkQuery = 'SELECT count(*) FROM runs WHERE finished_at IS NULL AND (type <> \'site_check\' OR (type = \'site_check\' AND check_kind = \'lighthouse\' AND (executor = \'cloud\' OR (claimed_by IS NULL AND created_at < now() - make_interval(secs => ${checkClaimWindowSeconds})) OR (status = \'running\' AND heartbeat_at < now() - make_interval(secs => ${leaseSeconds + checkClaimWindowSeconds})))))'
 
-// The scheduler makes no model call, so it gets no model, embedding or bot
-// key. Only used when deployScheduler is true, so the token cannot be empty
-// here.
-var schedulerSecrets = concat(coreSecrets, configSecret, [
+// The scheduler makes no model call, so it gets no model or embedding key.
+// It gets the bot token to send a suspension or CI failure message, and the
+// GitHub token for the CI watch and the dependency audit. Only used when
+// deployScheduler is true, so the bearer token cannot be empty here.
+var schedulerSecrets = concat(coreSecrets, configSecret, telegramTokenSecret, githubTokenSecret, [
   {
     name: 'mercury-bearer-token'
     value: mercuryBearerToken
@@ -497,7 +499,7 @@ resource scheduler 'Microsoft.App/jobs@2024-03-01' = if (deployScheduler) {
               name: 'MERCURY_CONFIG_B64'
               secretRef: 'mercury-config'
             }
-          ])
+          ], telegramTokenEnvironment, githubTokenEnvironment)
         }
       ]
     }
