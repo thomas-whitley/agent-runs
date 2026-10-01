@@ -103,6 +103,12 @@ image), `e1d4bc7` (the token in the deploy) and `81f6903` (4d). 338 tests pass a
   left pending and unclaimed for 10 minutes (the 21:00 orphan was the ingress
   dropping the POST with `RemoteDisconnected` and delivering it later). All
   deployed as `0c4c537` (`mercury-config` `8d0e5f1`).
+- **The browser resume claim is green (2026-10-01).** A warm worker finishes a run
+  in about 4 s, so a kill often lands before the first event. `f9e7804` marks that
+  case with its own row, and is deployed. On the live page, run `ff9e0edd` was
+  killed after #235 and reconnected 62 s later, and #236 to #238 arrived once each,
+  ending `succeeded` (`9983140`). `~/post-run.sh` posts a live pytest run and prints
+  its page URL. The orphaned `pending` uptime run has cleared.
 - **A second session shared this working copy on 2026-09-30.** It was making
   `pytest` runs require the bearer token and editing README, `docs/mercury.md`,
   the Publish workflow and several tests. Both sessions running pytest at once
