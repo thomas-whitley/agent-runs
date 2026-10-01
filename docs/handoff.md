@@ -1,4 +1,4 @@
-# Handoff: step 4 done, step 5 is next (2026-09-30)
+# Handoff: step 5 done in code, not deployed yet (2026-10-01)
 
 ## Where things stand
 
@@ -33,6 +33,44 @@ Suggested 2d order, one commit each, test first: the claim window on the Python
 side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links`
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
+
+## Step 5 is done in code (2026-10-01), not deployed
+
+Commits `4880b73` (5a cleanup), `e151332` (5b CI watch), `5de9ce5` (5c scheduler
+secrets), `8e2bdc2` (5d dependency audit) and `a8b4ec6` (5e digest). 392 tests pass
+locally, and CI and Publish are green on all five. Live is still `f9e7804`, held
+back because the user had a job interview demo on the live page that afternoon.
+
+- **Three decisions the user made.** The dependency audit reads lock files through
+  the GitHub API and asks OSV.dev, rather than running `pip-audit` and `npm audit`,
+  because the image has no Node. The digest arrives at 08:00 Melbourne, the first
+  hourly tick after 07:30, rather than moving the Job's cron. The model writes the
+  digest from gathered facts, and the plain facts go out if it never answers.
+- **No new task types.** `ci_watch` and `dependency_audit` are `site_check` kinds
+  in `SCHEDULER_CHECK_KINDS` (`app/tasks.py`), because the registry is frozen until
+  every claim is green. The scheduler creates and closes them like uptime. Claim
+  refuses them, and the orphan close covers all three scheduler kinds.
+- **Nothing reads `schedule:` in `mercury.yaml`.** Every task is due by counting
+  from its last run, as the weekly checks already were. The sample now says so, and
+  `mercury-config`'s copy needs the same edit at the next `PUBLIC_SHA` bump.
+- **The scheduler Job now holds the bot token and the GitHub token** (`5de9ce5`).
+  Before that it held neither, so the live Job could suspend a site but never send
+  the Resume message that 2a and 4a promised. The Bicep params already flow from
+  `mercury-config`'s `deploy.yml`, so deploying is a `PUBLIC_SHA` bump.
+- **`GitHubClient` moved** to `app/github.py` with its own `GitHubError`.
+  `tests/github_fake.py` serves repo, workflow run, tree and raw content reads, and
+  `tests/osv_fake.py` serves OSV's batch query and advisory reads.
+- **Cleanup** strips bodies from finished non check runs older than 30 days (task,
+  step input and output, event output, keeping seq, kind and the done status) and
+  deletes runs older than 365 days, unlinking an open anyway run's `source_run_id`
+  first. `tests/test_cleanup.py` is the brief's named exit for step 5.
+- **Not yet proven live.** The digest has only met the stub model, since this
+  machine has no Gemini key. The first live digest at 08:00 after the deploy is the
+  check. The audit and CI read were run against the real GitHub and OSV.
+- **Found on the way.** The audit flags `oauthlib` 3.3.1 (2 advisories) and `pyjwt`
+  2.14.0 (1), both moderate, in this repo's `uv.lock`. The README's claims table has
+  no row for "Two task types run on two providers in one deploy", one of the eight
+  in `docs/mercury.md`, and 6d needs it.
 
 ## Step 4a to 4d are done (2026-09-30), 4e is next
 

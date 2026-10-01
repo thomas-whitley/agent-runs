@@ -353,6 +353,38 @@ tests/test_scheduler.py::test_run_due_checks_logs_the_created_run_with_no_client
 ============================== 6 passed in 4.70s ===============================
 ```
 
+## CI, dependencies, a daily digest, and retention
+
+The same hourly Job looks after the repos listed under `portfolio.repos`. Each of these is a `site_check` with its own `check_kind`, created through the API and closed by the scheduler itself the way uptime is, because the task registry gains no new type until every claim is green. Neither worker can claim one. `POST /checks/claim` refuses to hand them out and `tests/test_claim_endpoints.py` asserts it for each kind.
+
+A `ci_watch` runs every hour per repo. It reads the newest completed run of each workflow on the repo's default branch from the GitHub Actions API, and a workflow whose newest run ended `failure`, `timed_out` or `startup_failure` is failing. A failure the previous watch had not seen sends one Telegram message, unless one was sent for that repo in the last 24 hours, in which case it waits for the digest. A red CI is a finding and the check still succeeds. Only a GitHub call that fails counts towards the three failures that suspend the watch.
+
+A `dependency_audit` runs once every 7 days per repo. It lists the repo's files through the GitHub API, reads every `uv.lock` and `package-lock.json` outside `node_modules`, and sends the pinned versions to OSV.dev. This is not `pip-audit` or `npm audit`. OSV carries the PyPA and GitHub advisory databases those tools read, and querying it from the lock files means the image needs neither tool and no Node. Only lockfile versions 2 and 3 are read, which npm 7 and later write. The findings go in the digest only. Run against the real APIs on 2026-10-01, this repo's three lock files pinned 417 packages, audited in 5.2 seconds, with three moderate advisories, two on `oauthlib` 3.3.1 and one on `pyjwt` 2.14.0.
+
+The digest is due at 07:30 in `telegram.timezone`. The Job fires on the hour in UTC, so the first tick after that, at 08:00 Melbourne time, creates one `digest` run a day, and the worker writes and sends it. It gathers the last 24 hours of uptime per site, the latest Lighthouse scores beside the previous run's, broken links, failing CI, dependency advisories, suspended schedules and run counts, with every list cut to 10 items. Gemini writes the message from those facts and is told to use only them. If the model does not answer after its 4 tries, the facts go out as plain text, so a provider outage costs the wording and not the digest.
+
+Every tick also applies retention. A finished run older than 30 days loses its task input and every step's input and output, and each of its events keeps only its step number and kind, plus the status on the done event, which is what a caller with no token already sees. So a reconnect a month later still replays the run. A `site_check` keeps everything, because its first step is the summary the digest compares week over week. A run older than 365 days is deleted with its steps and events. Both windows come from `retention` in `mercury.yaml`.
+
+The scheduler Job holds the bot token and the GitHub token from `5de9ce5` on. Before that it held neither, so on the live deploy a site's third failure suspended its check but could not send the Resume message.
+
+```
+tests/test_cleanup.py::test_a_check_summary_survives_the_cleanup_that_strips_a_pytest_run PASSED
+tests/test_cleanup.py::test_a_stripped_run_still_replays_its_steps_and_its_done_status PASSED
+tests/test_cleanup.py::test_a_run_older_than_a_year_is_deleted_with_its_steps_and_events PASSED
+tests/test_ci_watch.py::test_a_new_failure_sends_one_message_and_says_so PASSED
+tests/test_ci_watch.py::test_the_same_failure_an_hour_later_sends_nothing PASSED
+tests/test_ci_watch.py::test_a_new_failure_inside_24_hours_of_a_message_waits_for_the_digest PASSED
+tests/test_ci_watch.py::test_a_red_ci_does_not_count_towards_suspending_the_watch PASSED
+tests/test_dependency_audit.py::test_an_audit_records_each_vulnerable_package_with_its_advisories PASSED
+tests/test_dependency_audit.py::test_findings_go_to_the_digest_and_send_no_message PASSED
+tests/test_digest.py::test_the_model_writes_the_digest_from_the_facts_and_it_is_sent PASSED
+tests/test_digest.py::test_if_the_model_never_answers_the_plain_facts_are_sent PASSED
+tests/test_digest.py::test_the_first_tick_after_half_past_seven_creates_one_digest_a_day PASSED
+============================= 36 passed in 26.09s ==============================
+```
+
+Those are 12 of the 36 tests in the four files. The digest has only run against the stub model so far.
+
 ## A weekly check on a self hosted worker, with a cloud fallback
 
 Lighthouse and the broken link crawl need a real browser, so they run in `checks/`, a Node 22 worker on a machine of my own rather than in the API image. For each page listed under `portfolio.pages` in `mercury.yaml`, the hourly scheduler Job posts a `lighthouse` and a `broken_links` check whenever none of that kind was created for that page in the last 7 days, and leaves them pending. The worker claims them through `POST /checks/claim` with the bearer token, which cannot claim any other run type, runs them, and posts a summary of about 1 KB.
