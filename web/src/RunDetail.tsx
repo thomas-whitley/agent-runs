@@ -51,6 +51,13 @@ export function RunDetail({
           </tr>
         </thead>
         <tbody>
+          {drops.includes(0) && (
+            <tr className="drop">
+              <td colSpan={4}>
+                Connection dropped before any event arrived. Reconnect asks for everything.
+              </td>
+            </tr>
+          )}
           {events.map((event) => (
             <Fragment key={event.id}>
               <tr data-testid="event-row" data-event-id={event.id}>

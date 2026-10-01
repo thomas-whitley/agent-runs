@@ -98,12 +98,15 @@ describe("RunDetail stream", () => {
     expect(screen.queryByRole("button", { name: "Kill connection" })).toBeNull();
   });
 
-  it("reconnects from the start when nothing arrived before the kill", () => {
+  it("reconnects from the start when nothing arrived before the kill, and says so", () => {
     render(<RunDetail runId={RUN} openSource={open} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Kill connection" }));
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    latest().send(229, "step", { seq: 1, kind: "plan" });
 
     expect(latest().url).toBe(`/runs/${RUN}/events`);
+    expect(screen.getByText(/dropped before any event arrived/)).toBeTruthy();
+    expect(shown()).toEqual(["229"]);
   });
 });
