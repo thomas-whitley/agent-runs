@@ -52,3 +52,7 @@ def configure_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
     logging.basicConfig(level=level, handlers=[handler], force=True)
+    # The Azure SDK logs every telemetry export's request and response at
+    # INFO, dozens of lines per run, against a 0.1 GB a day workspace cap.
+    # Its warnings and errors still come through.
+    logging.getLogger("azure").setLevel(logging.WARNING)

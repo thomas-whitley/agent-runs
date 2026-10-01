@@ -47,3 +47,16 @@ def test_a_log_line_inside_a_span_carries_its_trace_and_span_ids(capsys):
     payload = json.loads(capsys.readouterr().out.strip())
     assert payload["trace_id"] == expected_trace_id
     assert payload["span_id"] == expected_span_id
+
+
+def test_the_azure_sdks_own_request_logging_stays_out_of_the_logs(capsys):
+    """Every export to Azure Monitor logs its request and response at INFO,
+    dozens of lines per scheduler run, against a 0.1 GB a day workspace cap."""
+    configure_logging()
+
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").info("Request URL")
+    logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").info("Transmission")
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").warning("throttled")
+
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert [json.loads(line)["message"] for line in lines] == ["throttled"]
