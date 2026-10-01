@@ -210,6 +210,20 @@ def test_the_facts_cover_the_last_day_and_the_latest_weekly_checks(migrated_db):
     assert facts["runs"] == {"pytest": {"succeeded": 1}}
 
 
+def test_uptime_latency_is_stored_as_a_float_and_the_facts_round_it(migrated_db):
+    """check_site measures latency_ms as a float, as the live rows hold it."""
+    _check(
+        migrated_db,
+        "uptime",
+        SITE,
+        {"status_code": 200, "latency_ms": 83.62, "passed": True, "error": None},
+    )
+
+    [site] = gather_facts(migrated_db)["uptime"]
+
+    assert site["slowest_ms"] == 84
+
+
 def test_with_nothing_checked_the_facts_are_empty_and_still_render(migrated_db):
     facts = gather_facts(migrated_db)
 

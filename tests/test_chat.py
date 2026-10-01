@@ -279,3 +279,47 @@ def test_a_model_that_never_answers_closes_the_run_and_says_so(bot, fake_telegra
         "The model is not answering right now. Try again in a few minutes."
     ]
     assert migrated_db.execute("SELECT count(*) FROM telegram_turns").fetchone() == (0,)
+
+
+def test_an_uptime_check_from_chat_is_run_at_once_and_answered_with_its_result(
+    bot, fake_telegram, migrated_db
+):
+    """No worker claims an uptime check; the scheduler runs its own. One a
+    chat creates is run by the chat run itself, or it would wait forever."""
+    say(bot, f"is {bot}/health up?")
+    run_it(
+        migrated_db,
+        fake_telegram,
+        chat_run(migrated_db),
+        create("site_check", task=f"{bot}/health"),
+    )
+
+    status, check_kind = migrated_db.execute(
+        "SELECT status, check_kind FROM runs WHERE type = 'site_check'"
+    ).fetchone()
+    assert (status, check_kind) == ("succeeded", "uptime")
+    kinds = [
+        row[0]
+        for row in migrated_db.execute(
+            "SELECT kind FROM steps s JOIN runs r ON r.id = s.run_id "
+            "WHERE r.type = 'site_check' ORDER BY seq"
+        )
+    ]
+    assert kinds == ["check", "done"]
+    [reply] = edits(fake_telegram)
+    assert f"{bot}/health is up" in reply and "200" in reply
+
+
+def test_an_uptime_check_from_chat_that_fails_says_so(bot, fake_telegram, migrated_db):
+    say(bot, "is http://127.0.0.1:1 up?")
+    run_it(
+        migrated_db,
+        fake_telegram,
+        chat_run(migrated_db),
+        create("site_check", task="http://127.0.0.1:1"),
+    )
+
+    status = migrated_db.execute("SELECT status FROM runs WHERE type = 'site_check'").fetchone()
+    assert status == ("failed",)
+    [reply] = edits(fake_telegram)
+    assert "http://127.0.0.1:1 is down" in reply

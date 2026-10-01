@@ -16,6 +16,7 @@ import psycopg
 from pydantic import ValidationError
 
 from app.approvals import ask
+from app.checks import check_site
 from app.loop import (
     DEFAULT_MODEL_RETRY_ATTEMPTS,
     DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
@@ -139,7 +140,31 @@ def _create(
             message_id,
         ),
     ).fetchone()[0]
+    if run.check_kind == "uptime":
+        return str(run_id), _run_uptime_check(conn, str(run_id), run.inputs["task"].strip())
     return str(run_id), f"Started a {run.type} run, {str(run_id)[:8]}."
+
+
+def _run_uptime_check(conn, run_id: str, url: str) -> str:
+    """No worker claims an uptime check, because the scheduler runs and
+    closes its own. One a chat creates is run here, inside the chat run, the
+    way the scheduler would, and the reply is its result."""
+    result = check_site(url)
+    output = {
+        "status_code": result.status_code,
+        "latency_ms": result.latency_ms,
+        "passed": result.passed,
+        "error": result.error,
+    }
+    status = "succeeded" if result.passed else "failed"
+    with conn.transaction():
+        record_step(conn, run_id, 1, "check", output=output)
+        record_step(conn, run_id, 2, "done", output={"status": status})
+        finish_run(conn, run_id, status, 0)
+    if result.passed:
+        return f"{url} is up, {result.status_code} in {round(result.latency_ms)} ms."
+    reason = f"HTTP {result.status_code}" if result.status_code else "no answer"
+    return f"{url} is down, {reason}."
 
 
 def _create_chore(

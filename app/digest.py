@@ -41,7 +41,7 @@ what was fine. Plain text, no markdown, at most 1,200 characters."""
 
 _UPTIME = """
 SELECT r.task, count(*), count(*) FILTER (WHERE r.status <> 'succeeded'),
-       max((s.output ->> 'latency_ms')::int),
+       round(max((s.output ->> 'latency_ms')::numeric))::int,
        (array_agg((s.output ->> 'status_code')::int ORDER BY r.created_at DESC))[1]
 FROM runs r LEFT JOIN steps s ON s.run_id = r.id AND s.seq = 1
 WHERE r.type = 'site_check' AND coalesce(r.check_kind, 'uptime') = 'uptime'
