@@ -67,8 +67,9 @@ back because the user had a job interview demo on the live page that afternoon.
 - **Not yet proven live.** The digest has only met the stub model, since this
   machine has no Gemini key. The first live digest at 08:00 after the deploy is the
   check. The audit and CI read were run against the real GitHub and OSV.
-- **Found on the way.** The audit flags `oauthlib` 3.3.1 (2 advisories) and `pyjwt`
-  2.14.0 (1), both moderate, in this repo's `uv.lock`. The README's claims table has
+- **Found on the way.** The audit flagged `oauthlib` 3.3.1 (2 advisories) and `pyjwt`
+  2.14.0 (1), both moderate and both from the Azure Monitor exporter. The lock now
+  pins `oauthlib` 4.0.0 and `pyjwt` 2.15.1, and OSV finds none in its 79 packages. The README's claims table has
   no row for "Two task types run on two providers in one deploy", one of the eight
   in `docs/mercury.md`, and 6d needs it.
 
