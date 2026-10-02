@@ -1,4 +1,4 @@
-# Handoff: 5f and 5g live, rename (6d) next (2026-10-02)
+# Handoff: 5f, 5g and the rename (6d) done (2026-10-02)
 
 ## Where things stand
 
@@ -87,6 +87,16 @@ became run `100c1125` (`source: n8n`) at 08:30, the approval went in from a shel
 the live deploy, not in CI; `n8n/README.md` has the story. n8n's two credentials exist
 only in the `n8n_data` volume. **Next is step 6d, the rename to `mercury`**, which the
 user approved starting; ask before each outward step.
+
+**Step 6d is done: the repo is `thomas-whitley/mercury`.** Renamed with `gh repo
+rename` on 2026-10-02, commit `3adae98` published `ghcr.io/thomas-whitley/mercury`
+(anonymous manifest pull 200, so public), and `mercury-config` commit `1600729` set
+`PUBLIC_REPO` and `PUBLIC_SHA` to it and renamed the portfolio entry. Deploy was
+green, and both `agent-runs-api` and `agent-runs-scheduler` run the `mercury` image;
+`/health` is ok and the MCP `status` tool answers. Azure names stay `agent-runs-*`.
+Still named `agent-runs`: the web page's title and `<h1>`, the FastAPI title, the
+`pyproject` name and the local directory `~/projects/agent-runs`. The old GHCR
+package `agent-runs` still exists and can be deleted once no revision uses it.
 
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
 `docker.service` both disabled and inactive), so the checks worker was down and the
