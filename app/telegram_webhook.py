@@ -141,9 +141,11 @@ async def _answer(request: Request, text: str) -> str | None:
     if command == "/runs":
         return await _recent_runs(pool)
     if command == "/status":
-        return await _status(pool, request.app.state.mercury.sites, request)
+        return await status_text(
+            pool, request.app.state.mercury.sites, request.app.state.settings.max_runs_per_day
+        )
     if command == "/cancel":
-        return await _cancel(pool, argument.strip().lower())
+        return await cancel_by_prefix(pool, argument.strip().lower())
     if command == "/resume":
         return await _resume(pool, argument.strip())
     return None
@@ -186,8 +188,8 @@ def _clock(moment: datetime) -> str:
     return moment.strftime("%d %b %H:%M UTC")
 
 
-async def _status(pool, sites: tuple[str, ...], request: Request) -> str:
-    limit = request.app.state.settings.max_runs_per_day
+async def status_text(pool, sites: tuple[str, ...], limit: int) -> str:
+    """The /status answer. The MCP server's status tool returns the same."""
     lines = []
     async with pool.connection() as conn:
         for site in sites:
@@ -203,7 +205,8 @@ async def _status(pool, sites: tuple[str, ...], request: Request) -> str:
     return "\n".join(lines)
 
 
-async def _cancel(pool, prefix: str) -> str:
+async def cancel_by_prefix(pool, prefix: str, by: str = "Telegram") -> str:
+    """The /cancel answer. The MCP server's cancel_run tool calls it with by="MCP"."""
     if not _RUN_PREFIX.match(prefix):
         return CANCEL_USAGE
     async with pool.connection() as conn:
@@ -211,7 +214,7 @@ async def _cancel(pool, prefix: str) -> str:
             row = await (await conn.execute(_FIND_UNFINISHED, (f"{prefix}%",))).fetchone()
             if row is None or not await _close_cancelled(conn, row[0]):
                 return f"No unfinished run starts with {prefix}."
-    logger.info("cancelled run %s from Telegram", row[0], extra={"run_id": str(row[0])})
+    logger.info("cancelled run %s from %s", row[0], by, extra={"run_id": str(row[0])})
     return f"Cancelled {prefix[:8]}."
 
 

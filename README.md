@@ -486,6 +486,31 @@ PASSED
 
 From the Approve press to the chore ending took 5.3 seconds on the first run, covering the clone, the fixture's tests, the push and the two GitHub calls. [Pull request 2](https://github.com/thomas-whitley/mercury-fixture/pull/2) stays on the fixture, closed, as the record.
 
+## An MCP server for Claude Code
+
+The API serves an MCP server at `/mcp`, built on the official Python `mcp` SDK (2.2) and mounted in the FastAPI app, so it adds no process, image or secret. It speaks streamable HTTP, stateless with JSON responses, so any replica answers any request and nothing is kept between calls. Every request must carry the bearer token, checked with the same constant time compare as `POST /runs`, and one without it is a 401 before the SDK sees it.
+
+There are six tools. `create_run`, `list_runs`, `get_run` and `get_run_events` call the same functions as `POST /runs`, `GET /runs`, `GET /runs/{id}` and the event stream (`app/run_api.py`). `cancel_run` and `status` give the same answers as `/cancel` and `/status` on Telegram. Runs created here are written `source: mcp`, and anything `POST /runs` would refuse comes back as a tool error with the same status and reason. There is no approve tool. A `repo_chore` created here waits for the Approve button on Telegram like any other, and `create_run`'s description tells the client so. It is meant for Claude Code, which can send a header:
+
+```
+claude mcp add --transport http mercury <api url>/mcp --header "Authorization: Bearer <token>"
+```
+
+The claude.ai connector UI wants OAuth, which this server does not do.
+
+```
+tests/test_mcp.py::test_the_tools_are_the_six_and_none_of_them_approves PASSED
+tests/test_mcp.py::test_a_run_created_over_mcp_reads_back_with_source_mcp PASSED
+tests/test_mcp.py::test_a_chore_created_over_mcp_waits_for_approval PASSED
+tests/test_mcp.py::test_a_refused_run_is_a_tool_error_and_creates_nothing PASSED
+tests/test_mcp.py::test_cancel_ends_the_run_and_its_events_say_so PASSED
+tests/test_mcp.py::test_status_is_the_same_text_as_telegram_status PASSED
+tests/test_mcp.py::test_a_request_without_the_token_is_refused[None] PASSED
+tests/test_mcp.py::test_a_request_without_the_token_is_refused[Bearer wrong] PASSED
+tests/test_mcp.py::test_a_request_without_the_token_is_refused[Basic dGVzdA==] PASSED
+============================== 9 passed in 22.20s ==============================
+```
+
 ## Observability
 
 A run is one trace across both roles, not two unrelated ones. `POST /runs` opens a

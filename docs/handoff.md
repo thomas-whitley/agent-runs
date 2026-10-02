@@ -67,6 +67,16 @@ path. 408 tests pass. Not deployed.
 web tests pass. Not deployed. Next is item 3, the MCP server, after adding 5f and
 5g to `docs/mercury.md` and the brief.
 
+**Item 3 is in code, not live.** `app/mcp_server.py` mounts the MCP server at `/mcp`
+(`mcp` 2.2, where `FastMCP` is now `MCPServer`), stateless with JSON responses, behind
+`_RequireBearer`. The routes' logic moved to `app/run_api.py` so both call it, and
+`status_text` and `cancel_by_prefix` in `app/telegram_webhook.py` are shared with
+the tools. A refusal must be raised as the SDK's `ToolError`, because any other
+exception's text is hidden from the client. `tests/test_mcp.py` has 9 tests, and
+428 pass in all. **Still to do for the claim:** deploy (bump `PUBLIC_SHA`), add the
+server to Claude Code with the bearer token, create one run from Claude Code against
+the live API, and paste the `source: mcp` row under a new claims row.
+
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
 `docker.service` both disabled and inactive), so the checks worker was down and the
 compose database unavailable. `sudo systemctl enable --now docker.socket
