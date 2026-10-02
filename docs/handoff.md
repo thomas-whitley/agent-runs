@@ -1,4 +1,4 @@
-# Handoff: step 5 done in code, not deployed yet (2026-10-01)
+# Handoff: step 5 and Ollama live, 5f and 5g next (2026-10-02)
 
 ## Where things stand
 
@@ -34,7 +34,29 @@ side, the PageSpeed executor behind it, the crawl in `checks/` and `broken_links
 in `KINDS`, then `checks/compose.yml`, the Lighthouse integration test in CI and the
 README row.
 
-## Step 5 is done in code (2026-10-01), not deployed
+## Step 5 and Ollama are live, the next work is 5f and 5g (2026-10-02)
+
+`mercury-config` pins `PUBLIC_SHA` at `4dc7c5f` (its commit `a316f19`, Deploy green at
+04:21 UTC on 2026-10-01), and its `deploy.yml` carries the `OLLAMA_API_KEY` line.
+The first live digest is run `e8d87412`, created 22:00 UTC on 2026-10-01 (08:00
+Melbourne), on gemini with 860 tokens, written by the model and sent. Its text is in
+the README. It reported one of the private config's sites answering 403 and the
+PageSpeed quota spent, because `PAGESPEED_API_KEY` is still unset. The README claim
+"Two task types run on two providers in one deploy" is green from the live rows,
+chat on ollama and pytest and digest on gemini.
+
+The next work comes from `job-hunt/publish/mercury/next-message-2026-10-02.md`
+(decisions 88 to 101). Carry it into `docs/mercury.md` and the brief as steps 5f
+(MCP server at `/mcp`) and 5g (n8n issue to chore on the home PC), ahead of 6d, then
+build 1 to 4 in its order, starting with one approval gate at run creation for every
+`repo_chore` source.
+
+Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
+`docker.service` both disabled and inactive), so the checks worker was down and the
+compose database unavailable. `sudo systemctl enable --now docker.socket
+docker.service` fixes both.
+
+## Step 5 is done in code (2026-10-01), deployed 2026-10-01
 
 Commits `4880b73` (5a cleanup), `e151332` (5b CI watch), `5de9ce5` (5c scheduler
 secrets), `8e2bdc2` (5d dependency audit) and `a8b4ec6` (5e digest). 392 tests pass

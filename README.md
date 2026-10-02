@@ -48,6 +48,7 @@ On the live deploy on 2026-10-01, run `ff9e0edd` was opened on the page and the 
 | The webhook cold start is measured and stated | `tests/test_telegram_webhook.py::test_each_answer_logs_how_long_after_the_message_was_sent`, and the live log line below | green, 19.0 s from zero replicas |
 | A Telegram message opens a PR on a named repo | `tests/test_repo_chore_github.py`, against the real `thomas-whitley/mercury-fixture` | green when run with a GitHub token, output below. CI has no token, so it skips there |
 | A dropped browser stream resumes from the last event without duplicating rows | `web/test/run-stream.test.tsx` against a fake `EventSource`, `tests/test_events_without_token.py`, and the live page below | green |
+| Two task types run on two providers in one deploy | `tests/test_tasks.py::test_chat_runs_on_ollama_and_the_rest_on_gemini`, `tests/test_fallback.py`, and the live run rows below | green |
 
 ## Resume, and the test that proves it
 
@@ -383,7 +384,7 @@ tests/test_digest.py::test_the_first_tick_after_half_past_seven_creates_one_dige
 ============================= 36 passed in 26.09s ==============================
 ```
 
-Those are 12 of the 36 tests in the four files. The digest has only run against the stub model so far.
+Those are 12 of the 36 tests in the four files. The first live digest, written by Gemini on 2026-10-02, is pasted further down with the two provider proof.
 
 ## A weekly check on a self hosted worker, with a cloud fallback
 
@@ -575,6 +576,33 @@ tests/test_budget.py::test_the_caps_are_config[MONTHLY_BUDGET_USD-2.5] PASSED
 The loop talks to a `Model` protocol with one `complete` method. As of Mercury step 1 the provider is no longer read from `MODEL`: each task type in `app/tasks.py` names a provider, and `PROVIDERS` in `app/config.py` maps that name to a kind, a base URL, a model, and the env var holding its key. `pytest`, `repo_chore` and `digest` name `gemini`, whose key is `MODEL_API_KEY`. `chat` names `ollama`, which is `gpt-oss:120b` on Ollama's cloud free tier at `https://ollama.com/v1`, whose key is `OLLAMA_API_KEY`. The registry also carries `haiku`, whose key is `ANTHROPIC_API_KEY`, and no type names it. A run whose provider has no key configured is refused, the same way a run past the daily limit is, so its stream closes with `status: refused` rather than staying claimed forever. `.env.example` lists the three key variables.
 
 Each type also names a fallback, `ollama` for the Gemini types and `gemini` for chat. On 2026-10-01 both live chat runs ended in error because Gemini answered `503 This model is currently experiencing high demand` to all 4 tries. Now the first failed call switches the run to its fallback, and the retry the loop already makes is what reaches it, 2 seconds later, so a step takes no longer than it did with one provider and stays inside the 2 minute lease. The run's `provider` column then names the fallback, so the runs list and the daily token cap count the provider that answered. A fallback with no key configured is skipped, and the run carries on with its own provider. `tests/test_fallback.py` covers the switch, the retry reaching the fallback, and the column. Against the real API, `gpt-oss:120b` answered the chat prompt in 0.9 to 1.8 seconds with 400 to 460 tokens, and turned "add a docstring to greet() in mercury-fixture" into a `repo_chore` on that repo.
+
+```
+tests/test_tasks.py::test_chat_runs_on_ollama_and_the_rest_on_gemini PASSED
+tests/test_fallback.py::test_a_working_primary_answers_and_the_fallback_is_never_called PASSED
+tests/test_fallback.py::test_a_failed_primary_raises_once_and_switches_every_later_call_to_the_fallback PASSED
+tests/test_fallback.py::test_the_existing_retry_reaches_the_fallback_on_its_second_try PASSED
+tests/test_fallback.py::test_a_chat_run_whose_provider_fails_is_answered_by_the_fallback PASSED
+tests/test_fallback.py::test_a_run_answered_by_its_own_provider_keeps_it PASSED
+tests/test_fallback.py::test_a_fallback_with_no_key_leaves_the_run_on_its_own_provider PASSED
+============================== 7 passed in 6.10s ===============================
+```
+
+On the live deploy of `4dc7c5f`, `GET /runs` on 2026-10-02 lists both providers answering their own types, with no fallback taken.
+
+```
+1ad16c36  chat    ollama  succeeded  2026-10-01 07:04:56 UTC  572 tokens
+b459bf26  chat    ollama  succeeded  2026-10-01 07:01:51 UTC  658 tokens
+525ada6e  pytest  gemini  succeeded  2026-10-01 06:40:51 UTC  234 tokens
+e8d87412  digest  gemini  succeeded  2026-10-01 22:00:39 UTC  860 tokens
+```
+
+The last is the first live digest, at 08:00 Melbourne time. The model wrote it from the gathered facts and it was sent. A site from the private config and the Google project number in PageSpeed's error are left out below.
+
+```
+Attention needed: Uptime check failed for https://<private site>/ with status code 403, and Lighthouse page https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io/ returned an error (Quota exceeded for quota metric 'Queries' and limit 'Queries per day' of service 'pagespeedonline.googleapis.com').
+Everything else was fine: https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io/health passed all 24 checks, dependencies and CI runs had no vulnerabilities or failures, and chat and pytest runs succeeded.
+```
 
 ## Cost
 
