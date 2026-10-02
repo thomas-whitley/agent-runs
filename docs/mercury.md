@@ -38,6 +38,16 @@ Auth is a fine grained GitHub personal access token in Container Apps secrets, s
 
 Takeover: the worker heartbeats every 30 seconds and the lease is two minutes. A replica that finds an expired lease takes the run over. The clone was local to the dying container, so the chore restarts from the beginning. That is safe because the first step checks whether `agent/<run id>` already exists on the remote and resumes from it if so.
 
+## Other ways in: MCP and n8n
+
+Telegram is not the only thing that asks for runs. Two more callers come in through the same API, and neither adds a task type.
+
+**One approval gate.** A `repo_chore` waits for Approve on Telegram whatever created it. The gate is at run creation (`app/chores.py`), so a chore from chat, from a direct `POST /runs`, from the MCP server or from n8n gets the same question and the same 24 hour expiry. Every run records its `source`, one of `telegram`, `mcp`, `n8n`, `api` or `scheduler`, which `GET /runs`, `GET /runs/{id}` and the runs page show.
+
+**An MCP server at `/mcp`.** Streamable HTTP, from the official Python `mcp` SDK, mounted inside the existing FastAPI app, so it needs no new process, image or secret. Every tool sits behind the existing bearer token with the same constant time compare as `POST /runs`. The tools are `create_run`, `list_runs`, `get_run`, `get_run_events`, `cancel_run` and `status`, and each calls the same functions the HTTP routes call, so the daily run limit, the provider and dollar caps and the registry apply unchanged. There is no approve tool. A chore created over MCP waits for the button like any other, and `create_run`'s description says so, so the client tells the user to check Telegram. It is for Claude Code, which can send a bearer header. The claude.ai connector UI wants OAuth, which is out of scope.
+
+**n8n on the home PC.** n8n runs self hosted in Docker beside the checks worker, and nothing of it is in Azure. One workflow polls `thomas-whitley/mercury-fixture` every 15 minutes for open issues labelled `mercury`, because the home PC has no public address and a tunnel is a new moving part. Each new issue becomes a `repo_chore` posted to `POST /runs` with `source: n8n` and the issue's title and body as the instruction. Mercury asks for approval on Telegram. n8n polls the run until it ends, comments on the issue with the pull request link or the failure reason, and removes the label. It dedupes by issue number in the workflow's static data. Its credentials, the bearer token and a fine grained token scoped to the fixture repo, live in n8n's own store, and the committed workflow carries credential ids only.
+
 ## Scheduling
 
 A Container Apps Job with a cron trigger posts to the API. It is declared in the same Bicep as the apps, so the deploy workflow shows it, and it runs inside the same free grant. The API and the worker still scale to zero between runs; the Job only wakes them when there is work. An in process scheduler was rejected because it needs a replica awake all month, which alone would cost about 3.6 times the free grant. `pg_cron` was rejected because it would tie the schedule to the database plan.
@@ -124,6 +134,8 @@ Eight rows join the README's claims table. Each goes green only when a test or a
 | A dropped browser stream resumes from the last event without duplicating rows | Vitest test against a fake `EventSource`, and the live page |
 | A weekly check runs on a self hosted worker and falls back to the cloud path when it is offline | integration test exercising the fallback window |
 | One run is one trace across the API and the worker, with the context carried on the run row | in memory span exporter test asserting both share a trace id |
+| Claude Code queues and reads Mercury runs through its MCP server, and cannot approve them | in process MCP client test, and a `source: mcp` run row from the live deploy |
+| An n8n workflow turns a labelled GitHub issue into an approved pull request | green on the live deploy, not in CI: the issue, the `source: n8n` run, the PR and the issue comment |
 
 ## Build order
 
@@ -132,11 +144,11 @@ Eight rows join the README's claims table. Each goes green only when a test or a
 2. Scheduled Job in Bicep, the `site_check` type, the three claim endpoints and the `checks/` worker. First claim green.
 3. Telegram webhook, `chat`, progress messages. Cold start measured.
 4. Approvals table and `repo_chore`, against `mercury-fixture`.
-5. `digest`, audits, cleanup.
+5. `digest`, audits, cleanup. Then 5f, the approval gate at run creation, the `source` column and the MCP server, and 5g, the n8n workflow.
 6. README claims and the runs page in `web/`.
 
 Each step shows something from the phone before the riskiest piece, repo chores, lands. The run list endpoint is in step 1 rather than step 6 because the chat tools and `curl` both want it long before a page does. Steps 2 and 6 are each several hours of work, so the build brief splits them into lettered commits with an exit condition apiece.
 
 ## Out of scope
 
-Merging or publishing anything. More than one user. A GitHub App (the install flow and JWT exchange buy nothing here). Full conversation history with embeddings. Any browser UI beyond the runs page, and any authentication in the browser.
+Merging or publishing anything. More than one user. A GitHub App (the install flow and JWT exchange buy nothing here). Full conversation history with embeddings. Any browser UI beyond the runs page, and any authentication in the browser. OAuth for the MCP server, which the claude.ai connector UI would need.
