@@ -469,6 +469,8 @@ The first measurement, on 2026-09-29 with a 132 MB image, was 26.1 seconds, of w
 
 A message asking for a change to a repo listed in `mercury.yaml` becomes a `repo_chore` that waits for an Approve button. Once approved, the worker clones the repo, branches as `agent/<run id>`, lets the model rewrite whole files, and runs the repo's own `test_command`. The branch is pushed and a pull request opened only when the tests pass. Three red attempts end the run failed with nothing pushed, and the chat offers an Open it anyway button.
 
+The approval sits at run creation, in `app/chores.py`, so it does not depend on where a chore comes from. A `repo_chore` posted to `POST /runs` with `inputs.repo` is created `awaiting_approval` and the same question goes to the owner's chat. A repo outside `portfolio.repos` is a 422, and with no bot token or chat id configured it is a 503 that leaves no run behind, because a chore nobody was asked about would wait 24 hours for nothing. `tests/test_repo_chore_approval.py` covers both sources.
+
 `tests/test_repo_chore_github.py` runs that whole path against the real public repo `thomas-whitley/mercury-fixture`, with the stub model and the fake Telegram. The message goes into the webhook, the chat run turns it into a chore, the test presses Approve, and the worker opens a real pull request. The test then checks the pull request on GitHub, and closes it and deletes its branch whatever happened. It needs a token that can push to the fixture, so it is marked `integration` and skips without one.
 
 ```

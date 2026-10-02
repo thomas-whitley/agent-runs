@@ -5,11 +5,14 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from psycopg import connect
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.auth import require_bearer_token
 from app.check_claims import router as check_claims_router
+from app.chores import ChoreRefused, find_repo, request_chore
 from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.mercury_config import MercuryConfig, load_mercury_config
@@ -18,6 +21,7 @@ from app.run_list import DEFAULT_LIMIT, MAX_LIMIT, build_query, encode_cursor, s
 from app.run_request import RunRequest
 from app.stream import event_stream, parse_last_event_id
 from app.tasks import TASK_TYPES
+from app.telegram import TelegramClient, TelegramError
 from app.telegram_webhook import router as telegram_router
 from app.telemetry import configure_telemetry, start_run_trace
 
@@ -77,9 +81,7 @@ def create_app() -> FastAPI:
         if not task_type.public:
             require_bearer_token(request)
         if run.type == "repo_chore":
-            # A chore waits for a button press in Telegram (app/chat.py), and
-            # this endpoint has no way to ask, so it cannot start one.
-            raise HTTPException(status_code=422, detail="a repo_chore starts from Telegram")
+            return await run_in_threadpool(_request_chore, run, request)
         trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(
@@ -95,6 +97,30 @@ def create_app() -> FastAPI:
             )
             row = await cursor.fetchone()
         return RunCreated(id=row[0], status=row[1])
+
+    def _request_chore(run: RunRequest, request: Request) -> RunCreated:
+        """A chore from any caller waits for the same Approve button as one
+        asked for in chat (app/chores.py). With no bot or chat to ask, it is
+        refused rather than left waiting on a question nobody saw."""
+        try:
+            repo = find_repo(request.app.state.mercury.repos, run.inputs.get("repo"))
+        except ChoreRefused as refused:
+            raise HTTPException(status_code=422, detail=str(refused)) from None
+        settings = request.app.state.settings
+        chat_id = request.app.state.mercury.telegram_chat_id
+        if not settings.telegram_bot_token or not chat_id:
+            raise HTTPException(
+                status_code=503, detail="a repo_chore needs Telegram to ask for approval"
+            )
+        telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_api_url)
+        try:
+            with connect(settings.database_url, autocommit=True) as conn:
+                run_id = request_chore(conn, telegram, chat_id, repo, run.inputs["task"])
+        except TelegramError:
+            raise HTTPException(
+                status_code=502, detail="the approval question could not be sent"
+            ) from None
+        return RunCreated(id=run_id, status="awaiting_approval")
 
     app.include_router(check_claims_router)
     app.include_router(telegram_router)

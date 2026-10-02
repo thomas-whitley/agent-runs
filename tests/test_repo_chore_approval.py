@@ -1,7 +1,8 @@
 """A repo chore starts only after a button press. The chat echoes the repo
 and the instruction with Approve and Decline, and the run waits where no
 worker will claim it. Only repos listed in mercury.yaml with a test command
-can have a chore, and POST /runs cannot create one at all.
+can have a chore. The gate sits at run creation, so a chore posted to
+POST /runs waits for the same button as one asked for in chat.
 """
 
 import json
@@ -26,7 +27,14 @@ INSTRUCTION = "Add a test for subtract"
 @pytest.fixture
 def bot(start_server, fake_telegram, monkeypatch, tmp_path):
     config = tmp_path / "mercury.yaml"
-    config.write_text(yaml.dump({"telegram": {"chat_id": CHAT}}))
+    config.write_text(
+        yaml.dump(
+            {
+                "telegram": {"chat_id": CHAT},
+                "portfolio": {"repos": [{"name": REPO, "test_command": "uv run pytest"}]},
+            }
+        )
+    )
     monkeypatch.setenv("MERCURY_CONFIG_PATH", str(config))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", SECRET)
@@ -119,14 +127,85 @@ def test_the_prompt_names_the_repos_a_chore_may_touch(bot, fake_telegram, migrat
     assert REPO in model.prompts[0]
 
 
-def test_post_runs_cannot_create_a_repo_chore(bot):
-    response = httpx2.post(
-        f"{bot}/runs",
-        json={"type": "repo_chore", "inputs": {"task": INSTRUCTION, "repo": REPO}},
+def post_chore(base_url: str, repo: str = REPO, task: str = INSTRUCTION) -> httpx2.Response:
+    return httpx2.post(
+        f"{base_url}/runs",
+        json={"type": "repo_chore", "inputs": {"task": task, "repo": repo}},
         headers={"Authorization": "Bearer test-bearer-token"},
     )
 
+
+def press(base_url: str, approval_id: int) -> None:
+    body = {
+        "update_id": 2,
+        "callback_query": {
+            "id": "cb-1",
+            "from": {"id": CHAT},
+            "message": {"message_id": 1, "chat": {"id": CHAT, "type": "private"}},
+            "data": f"approval:{approval_id}:yes",
+        },
+    }
+    httpx2.post(
+        f"{base_url}/telegram", json=body, headers={"X-Telegram-Bot-Api-Secret-Token": SECRET}
+    )
+
+
+def test_a_repo_chore_posted_to_runs_waits_for_the_same_approval(bot, fake_telegram, migrated_db):
+    response = post_chore(bot)
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "awaiting_approval"
+    row = migrated_db.execute(
+        "SELECT id, status, task, repo, telegram_chat_id, telegram_message_id "
+        "FROM runs WHERE type = 'repo_chore'"
+    ).fetchone()
+    [question] = fake_telegram.sent()
+    assert str(row[0]) == response.json()["id"]
+    assert row[1:] == ("awaiting_approval", INSTRUCTION, REPO, CHAT, 1)
+    assert REPO in question["text"]
+    assert INSTRUCTION in question["text"]
+    labels = [b["text"] for r in question["reply_markup"]["inline_keyboard"] for b in r]
+    assert labels == ["Approve", "Decline"]
+    assert claim_next_run(migrated_db, "worker-1") is None
+
+
+def test_approving_a_posted_chore_hands_it_to_the_worker(bot, fake_telegram, migrated_db):
+    run_id = post_chore(bot).json()["id"]
+    [approval_id] = migrated_db.execute("SELECT id FROM approvals").fetchone()
+
+    press(bot, approval_id)
+
+    assert str(claim_next_run(migrated_db, "worker-1")) == run_id
+
+
+def test_a_posted_chore_outside_the_portfolio_is_refused(bot, fake_telegram, migrated_db):
+    response = post_chore(bot, repo="someone/else")
+
     assert response.status_code == 422
+    assert REPO in response.json()["detail"]
+    assert migrated_db.execute("SELECT count(*) FROM runs").fetchone() == (0,)
+    assert fake_telegram.sent() == []
+
+
+def test_a_posted_chore_with_no_bot_to_ask_is_refused_and_leaves_no_run(
+    bot_without_telegram, migrated_db
+):
+    response = post_chore(bot_without_telegram)
+
+    assert response.status_code == 503
+    assert migrated_db.execute("SELECT count(*) FROM runs").fetchone() == (0,)
+
+
+@pytest.fixture
+def bot_without_telegram(start_server, monkeypatch, tmp_path):
+    config = tmp_path / "mercury.yaml"
+    config.write_text(
+        yaml.dump({"portfolio": {"repos": [{"name": REPO, "test_command": "uv run pytest"}]}})
+    )
+    monkeypatch.setenv("MERCURY_CONFIG_PATH", str(config))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("MERCURY_BEARER_TOKEN", "test-bearer-token")
+    return start_server()
 
 
 def test_repos_are_read_with_their_test_command(tmp_path):

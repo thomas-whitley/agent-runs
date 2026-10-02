@@ -15,8 +15,8 @@ from typing import Any
 import psycopg
 from pydantic import ValidationError
 
-from app.approvals import ask
 from app.checks import check_site
+from app.chores import ChoreRefused, find_repo, request_chore
 from app.loop import (
     DEFAULT_MODEL_RETRY_ATTEMPTS,
     DEFAULT_MODEL_RETRY_BACKOFF_SECONDS,
@@ -38,7 +38,6 @@ NOT_YET = {
     "digest": "The digest is not wired up yet.",
 }
 WAITING = "That one needs your approval, below."
-NO_REPOS = "No repos are listed for chores in mercury.yaml."
 # The types a message may start. chat itself is not one of them.
 CREATABLE = ("pytest", "site_check")
 
@@ -73,16 +72,6 @@ DELETE FROM telegram_turns WHERE chat_id = %s AND id NOT IN (
 _CREATE = """
 INSERT INTO runs (task, type, provider, check_kind, telegram_chat_id, telegram_message_id)
 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
-"""
-# A chore waits where no worker claims it, on the question's message, so
-# its progress replaces the question once it is approved.
-_CREATE_CHORE = """
-INSERT INTO runs (task, type, provider, repo, status, telegram_chat_id)
-VALUES (%s, 'repo_chore', %s, %s, 'awaiting_approval', %s) RETURNING id
-"""
-_SET_MESSAGE_FROM_APPROVAL = """
-UPDATE runs SET telegram_message_id = (SELECT message_id FROM approvals WHERE id = %s)
-WHERE id = %s
 """
 
 
@@ -174,38 +163,23 @@ def _create_chore(
     repos: tuple[RepoConfig, ...],
     telegram: TelegramClient | None,
 ) -> tuple[str | None, str]:
-    """A chore is created waiting and asked about, per docs/mercury.md: it
-    echoes the repo and the instruction and starts on a button press only."""
-    instruction, name = inputs.get("task"), inputs.get("repo")
+    """A chore goes through the gate in app/chores.py, which echoes the repo
+    and the instruction and starts it on a button press only."""
+    instruction = inputs.get("task")
     if not isinstance(instruction, str) or not instruction.strip():
         return None, CANNOT
-    if not repos:
-        return None, NO_REPOS
-    repo = next((repo for repo in repos if repo.name == name), None)
-    if repo is None:
-        return None, "I can only work on " + ", ".join(r.name for r in repos) + "."
-    if not repo.test_command:
-        return None, f"{repo.name} has no test_command in mercury.yaml, so it cannot have a chore."
+    try:
+        repo = find_repo(repos, inputs.get("repo"))
+    except ChoreRefused as refused:
+        return None, str(refused)
     if telegram is None:
         return None, CANNOT
-    instruction = instruction.strip()
-    question = (
-        f"Repo chore on {repo.name}:\n{instruction}\n\n"
-        f"It runs `{repo.test_command}` and opens a pull request only if that passes."
-    )
     try:
-        # One transaction, so a question that could not be sent leaves no
-        # run waiting on an answer nobody can give.
-        with conn.transaction():
-            run_id = conn.execute(
-                _CREATE_CHORE, (instruction, TASK_TYPES["repo_chore"].provider, repo.name, chat_id)
-            ).fetchone()[0]
-            approval_id = ask(conn, telegram, chat_id, "start_run", question, run_id=str(run_id))
-            conn.execute(_SET_MESSAGE_FROM_APPROVAL, (approval_id, run_id))
+        run_id = request_chore(conn, telegram, chat_id, repo, instruction)
     except TelegramError as error:
         logger.error("could not ask about a repo chore: %s", error)
         return None, "I could not send the approval question, so nothing was started."
-    return str(run_id), WAITING
+    return run_id, WAITING
 
 
 def run_chat(
