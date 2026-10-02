@@ -16,21 +16,29 @@ MAX_LIMIT = 200
 
 # created_at DESC, id DESC: newest first, with the run's own id (a uuid, not
 # time ordered, but a fixed total order) breaking a tie on created_at.
-LIST_RUNS = """
+_COLUMNS = """
 SELECT id, type, provider, executor, status, tokens_used,
        extract(epoch from (finished_at - created_at)) AS duration_seconds,
-       created_at
+       created_at, source
 FROM runs
-{where}
+"""
+# GET /runs/{id}: one row, the same fields as the list.
+ONE_RUN = _COLUMNS + "WHERE id = %s"
+LIST_RUNS = (
+    _COLUMNS
+    + """{where}
 ORDER BY created_at DESC, id DESC
 LIMIT %s
 """
+)
 
 _CURSOR_CLAUSE = "WHERE (created_at, id) < (%s, %s)"
 
 
 def serialize_run_row(row: tuple) -> dict:
-    run_id, type_, provider, executor, status, tokens_used, duration_seconds, created_at = row
+    run_id, type_, provider, executor, status, tokens_used, duration_seconds, created_at, source = (
+        row
+    )
     return {
         "id": str(run_id),
         "type": type_,
@@ -42,6 +50,7 @@ def serialize_run_row(row: tuple) -> dict:
         # default jsonable_encoder stringification, is what a client wants.
         "duration_seconds": float(duration_seconds) if duration_seconds is not None else None,
         "created_at": created_at.isoformat(),
+        "source": source,
     }
 
 

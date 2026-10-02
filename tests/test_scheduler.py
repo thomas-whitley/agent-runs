@@ -22,9 +22,9 @@ def test_run_due_checks_creates_a_run_and_writes_its_result(start_server, migrat
     assert len(created) == 1
     run_id = created[0]
     row = migrated_db.execute(
-        "SELECT type, status, tokens_used FROM runs WHERE id = %s", (run_id,)
+        "SELECT type, status, tokens_used, source FROM runs WHERE id = %s", (run_id,)
     ).fetchone()
-    assert row == ("site_check", "succeeded", 0)
+    assert row == ("site_check", "succeeded", 0, "scheduler")
 
     output = migrated_db.execute(
         "SELECT output FROM steps WHERE run_id = %s AND kind = 'check'", (run_id,)

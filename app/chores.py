@@ -14,8 +14,8 @@ from app.tasks import TASK_TYPES
 from app.telegram import TelegramClient
 
 _CREATE = """
-INSERT INTO runs (task, type, provider, repo, status, telegram_chat_id)
-VALUES (%s, 'repo_chore', %s, %s, 'awaiting_approval', %s) RETURNING id
+INSERT INTO runs (task, type, provider, repo, status, telegram_chat_id, source)
+VALUES (%s, 'repo_chore', %s, %s, 'awaiting_approval', %s, %s) RETURNING id
 """
 # Its progress replaces the question once it is approved.
 _SET_MESSAGE_FROM_APPROVAL = """
@@ -47,6 +47,7 @@ def request_chore(
     chat_id: int,
     repo: RepoConfig,
     instruction: str,
+    source: str,
 ) -> str:
     """Create the chore waiting and ask about it. Returns the run id.
 
@@ -60,7 +61,8 @@ def request_chore(
     )
     with conn.transaction():
         run_id = conn.execute(
-            _CREATE, (instruction, TASK_TYPES["repo_chore"].provider, repo.name, chat_id)
+            _CREATE,
+            (instruction, TASK_TYPES["repo_chore"].provider, repo.name, chat_id, source),
         ).fetchone()[0]
         approval_id = ask(conn, telegram, chat_id, "start_run", question, run_id=str(run_id))
         conn.execute(_SET_MESSAGE_FROM_APPROVAL, (approval_id, run_id))

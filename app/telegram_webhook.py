@@ -113,8 +113,9 @@ async def telegram_webhook(request: Request) -> dict:
     async with request.app.state.pool.connection() as conn:
         row = await (
             await conn.execute(
-                "INSERT INTO runs (task, type, provider, telegram_chat_id, telegram_message_id) "
-                "VALUES (%s, 'chat', %s, %s, %s) RETURNING id",
+                "INSERT INTO runs "
+                "(task, type, provider, telegram_chat_id, telegram_message_id, source) "
+                "VALUES (%s, 'chat', %s, %s, %s, 'telegram') RETURNING id",
                 (text, TASK_TYPES["chat"].provider, chat_id, message_id),
             )
         ).fetchone()

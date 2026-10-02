@@ -1,16 +1,22 @@
 """The body of POST /runs, validated against the task registry. A chat run
 creates its run through the same model, so both paths refuse the same input."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.tasks import CHECK_KINDS, DEFAULT_CHECK_KIND, TASK_TYPES
 
+# What a caller of POST /runs may say it is. telegram and mcp are set inside
+# the app (app/telegram_webhook.py, app/chat.py, the MCP server), so a POST
+# cannot claim either.
+PostedSource = Literal["api", "n8n", "scheduler"]
+
 
 class RunRequest(BaseModel):
     type: str
     inputs: dict[str, Any]
+    source: PostedSource = "api"
 
     @field_validator("type")
     @classmethod

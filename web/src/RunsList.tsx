@@ -58,6 +58,7 @@ export function RunsList({ fetchPage, pageSize }: { fetchPage: FetchPage; pageSi
               <th scope="col">Run</th>
               <th scope="col">Created</th>
               <th scope="col">Type</th>
+              <th scope="col">Source</th>
               <th scope="col">Provider</th>
               <th scope="col">Executor</th>
               <th scope="col">Status</th>
@@ -77,6 +78,7 @@ export function RunsList({ fetchPage, pageSize }: { fetchPage: FetchPage; pageSi
                 </td>
                 <td>{formatCreated(run.created_at)}</td>
                 <td>{run.type}</td>
+                <td>{run.source}</td>
                 <td>{run.provider ?? <span className="muted">none</span>}</td>
                 <td>{run.executor ?? <span className="muted">none</span>}</td>
                 <td>

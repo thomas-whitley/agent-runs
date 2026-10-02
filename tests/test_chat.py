@@ -59,9 +59,10 @@ def test_free_text_becomes_a_chat_run_with_one_placeholder_message(bot, fake_tel
     say(bot, "check the site for broken links")
 
     row = migrated_db.execute(
-        "SELECT task, status, telegram_chat_id, telegram_message_id FROM runs WHERE type = 'chat'"
+        "SELECT task, status, telegram_chat_id, telegram_message_id, source "
+        "FROM runs WHERE type = 'chat'"
     ).fetchone()
-    assert row == ("check the site for broken links", "pending", CHAT, 1)
+    assert row == ("check the site for broken links", "pending", CHAT, 1, "telegram")
     assert [p["text"] for p in fake_telegram.sent()] == ["On it."]
 
 
@@ -323,3 +324,13 @@ def test_an_uptime_check_from_chat_that_fails_says_so(bot, fake_telegram, migrat
     assert status == ("failed",)
     [reply] = edits(fake_telegram)
     assert "http://127.0.0.1:1 is down" in reply
+
+
+def test_a_run_the_chat_creates_is_sourced_from_telegram(bot, fake_telegram, migrated_db):
+    say(bot, "make this pass: ...")
+
+    run_it(migrated_db, fake_telegram, chat_run(migrated_db), create("pytest", task=TEST_FILE))
+
+    assert migrated_db.execute("SELECT source FROM runs WHERE type = 'pytest'").fetchone() == (
+        "telegram",
+    )

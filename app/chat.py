@@ -70,8 +70,8 @@ DELETE FROM telegram_turns WHERE chat_id = %s AND id NOT IN (
 )
 """
 _CREATE = """
-INSERT INTO runs (task, type, provider, check_kind, telegram_chat_id, telegram_message_id)
-VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+INSERT INTO runs (task, type, provider, check_kind, telegram_chat_id, telegram_message_id, source)
+VALUES (%s, %s, %s, %s, %s, %s, 'telegram') RETURNING id
 """
 
 
@@ -175,7 +175,7 @@ def _create_chore(
     if telegram is None:
         return None, CANNOT
     try:
-        run_id = request_chore(conn, telegram, chat_id, repo, instruction)
+        run_id = request_chore(conn, telegram, chat_id, repo, instruction, "telegram")
     except TelegramError as error:
         logger.error("could not ask about a repo chore: %s", error)
         return None, "I could not send the approval question, so nothing was started."

@@ -8,6 +8,8 @@ export interface Run {
   tokens: number;
   duration_seconds: number | null;
   created_at: string;
+  /** telegram, mcp, n8n, api or scheduler: who asked for the run. */
+  source: string;
 }
 
 export interface RunsPage {

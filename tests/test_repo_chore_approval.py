@@ -71,12 +71,12 @@ def test_a_repo_chore_waits_for_approval_with_the_repo_and_instruction_echoed(
     run_it(migrated_db, fake_telegram, chore())
 
     row = migrated_db.execute(
-        "SELECT status, task, repo, telegram_chat_id, telegram_message_id "
+        "SELECT status, task, repo, telegram_chat_id, telegram_message_id, source "
         "FROM runs WHERE type = 'repo_chore'"
     ).fetchone()
     # Message 1 is "On it.", message 2 the question. Progress lands on the question.
     _, question = fake_telegram.sent()
-    assert row == ("awaiting_approval", INSTRUCTION, REPO, CHAT, 2)
+    assert row == ("awaiting_approval", INSTRUCTION, REPO, CHAT, 2, "telegram")
     assert REPO in question["text"]
     assert INSTRUCTION in question["text"]
     labels = [b["text"] for r in question["reply_markup"]["inline_keyboard"] for b in r]
@@ -127,10 +127,12 @@ def test_the_prompt_names_the_repos_a_chore_may_touch(bot, fake_telegram, migrat
     assert REPO in model.prompts[0]
 
 
-def post_chore(base_url: str, repo: str = REPO, task: str = INSTRUCTION) -> httpx2.Response:
+def post_chore(
+    base_url: str, repo: str = REPO, task: str = INSTRUCTION, **extra
+) -> httpx2.Response:
     return httpx2.post(
         f"{base_url}/runs",
-        json={"type": "repo_chore", "inputs": {"task": task, "repo": repo}},
+        json={"type": "repo_chore", "inputs": {"task": task, "repo": repo}, **extra},
         headers={"Authorization": "Bearer test-bearer-token"},
     )
 
@@ -156,17 +158,30 @@ def test_a_repo_chore_posted_to_runs_waits_for_the_same_approval(bot, fake_teleg
     assert response.status_code == 201
     assert response.json()["status"] == "awaiting_approval"
     row = migrated_db.execute(
-        "SELECT id, status, task, repo, telegram_chat_id, telegram_message_id "
+        "SELECT id, status, task, repo, telegram_chat_id, telegram_message_id, source "
         "FROM runs WHERE type = 'repo_chore'"
     ).fetchone()
     [question] = fake_telegram.sent()
     assert str(row[0]) == response.json()["id"]
-    assert row[1:] == ("awaiting_approval", INSTRUCTION, REPO, CHAT, 1)
+    assert row[1:] == ("awaiting_approval", INSTRUCTION, REPO, CHAT, 1, "api")
     assert REPO in question["text"]
     assert INSTRUCTION in question["text"]
     labels = [b["text"] for r in question["reply_markup"]["inline_keyboard"] for b in r]
     assert labels == ["Approve", "Decline"]
     assert claim_next_run(migrated_db, "worker-1") is None
+
+
+def test_a_chore_n8n_posts_waits_for_approval_and_says_where_it_came_from(
+    bot, fake_telegram, migrated_db
+):
+    response = post_chore(bot, source="n8n")
+
+    assert response.json()["status"] == "awaiting_approval"
+    assert migrated_db.execute("SELECT status, source FROM runs").fetchone() == (
+        "awaiting_approval",
+        "n8n",
+    )
+    assert len(fake_telegram.sent()) == 1
 
 
 def test_approving_a_posted_chore_hands_it_to_the_worker(bot, fake_telegram, migrated_db):

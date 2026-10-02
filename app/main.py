@@ -17,7 +17,14 @@ from app.config import load_settings
 from app.logging_setup import configure_logging
 from app.mercury_config import MercuryConfig, load_mercury_config
 from app.migrations import apply_migrations
-from app.run_list import DEFAULT_LIMIT, MAX_LIMIT, build_query, encode_cursor, serialize_run_row
+from app.run_list import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    ONE_RUN,
+    build_query,
+    encode_cursor,
+    serialize_run_row,
+)
 from app.run_request import RunRequest
 from app.stream import event_stream, parse_last_event_id
 from app.tasks import TASK_TYPES
@@ -85,14 +92,15 @@ def create_app() -> FastAPI:
         trace_context = start_run_trace()
         async with request.app.state.pool.connection() as conn:
             cursor = await conn.execute(
-                "INSERT INTO runs (task, type, provider, trace_context, check_kind) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING id, status",
+                "INSERT INTO runs (task, type, provider, trace_context, check_kind, source) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, status",
                 (
                     run.inputs["task"].strip(),
                     run.type,
                     task_type.provider,
                     trace_context,
                     run.check_kind,
+                    run.source,
                 ),
             )
             row = await cursor.fetchone()
@@ -115,7 +123,9 @@ def create_app() -> FastAPI:
         telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_api_url)
         try:
             with connect(settings.database_url, autocommit=True) as conn:
-                run_id = request_chore(conn, telegram, chat_id, repo, run.inputs["task"])
+                run_id = request_chore(
+                    conn, telegram, chat_id, repo, run.inputs["task"], run.source
+                )
         except TelegramError:
             raise HTTPException(
                 status_code=502, detail="the approval question could not be sent"
@@ -140,6 +150,15 @@ def create_app() -> FastAPI:
             encode_cursor(rows[-1][7], rows[-1][0]) if rows and len(rows) == limit else None
         )
         return {"runs": [serialize_run_row(row) for row in rows], "next_cursor": next_cursor}
+
+    @app.get("/runs/{run_id}")
+    async def get_run(run_id: uuid.UUID, request: Request) -> dict:
+        async with request.app.state.pool.connection() as conn:
+            result = await conn.execute(ONE_RUN, (str(run_id),))
+            row = await result.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return serialize_run_row(row)
 
     @app.get("/runs/{run_id}/events")
     async def stream_run_events(

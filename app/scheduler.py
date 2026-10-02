@@ -98,7 +98,7 @@ def _create_run(
     run_type: str = "site_check",
 ) -> str:
     inputs = {"task": url} if kind is None else {"task": url, "kind": kind}
-    body = json.dumps({"type": run_type, "inputs": inputs}).encode()
+    body = json.dumps({"type": run_type, "inputs": inputs, "source": "scheduler"}).encode()
     request = urllib.request.Request(
         f"{api_base_url}/runs",
         data=body,

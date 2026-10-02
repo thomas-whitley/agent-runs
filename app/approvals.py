@@ -44,8 +44,10 @@ ANSWER = "UPDATE approvals SET answer = %s, answered_at = now() WHERE id = %s"
 RELEASE_RUN = "UPDATE runs SET status = 'pending' WHERE id = %s AND status = 'awaiting_approval'"
 # A new chore carrying the failed one's diff, reporting on the button's message.
 OPEN_ANYWAY = """
-INSERT INTO runs (task, type, provider, repo, source_run_id, telegram_chat_id, telegram_message_id)
-SELECT task, 'repo_chore', provider, repo, id, %s, %s FROM runs WHERE id = %s
+INSERT INTO runs (
+    task, type, provider, repo, source_run_id, telegram_chat_id, telegram_message_id, source
+)
+SELECT task, 'repo_chore', provider, repo, id, %s, %s, 'telegram' FROM runs WHERE id = %s
 RETURNING id
 """
 

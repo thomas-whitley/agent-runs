@@ -36,7 +36,10 @@ def test_runs_are_listed_newest_first_with_metadata_only(start_server, clean_db)
         "tokens",
         "duration_seconds",
         "created_at",
+        "source",
     }
+    # A row written without a source, as every row before migration 012 was.
+    assert run["source"] == "api"
 
 
 def test_duration_is_null_until_the_run_finishes(start_server, clean_db):
@@ -156,3 +159,26 @@ def test_get_runs_rejects_a_limit_below_one(start_server):
     response = httpx2.get(f"{base_url}/runs", params={"limit": 0})
 
     assert response.status_code == 422
+
+
+def test_one_run_is_read_by_its_id_with_the_same_fields_as_the_list(start_server, clean_db):
+    base_url = start_server()
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        run_id = conn.execute(
+            "INSERT INTO runs (task, type, provider, status, source) "
+            "VALUES ('x', 'pytest', 'gemini', 'pending', 'n8n') RETURNING id"
+        ).fetchone()[0]
+
+    response = httpx2.get(f"{base_url}/runs/{run_id}")
+
+    assert response.status_code == 200
+    assert response.json() == httpx2.get(f"{base_url}/runs").json()["runs"][0]
+    assert response.json()["source"] == "n8n"
+
+
+def test_an_unknown_run_id_is_a_404(start_server, clean_db):
+    base_url = start_server()
+
+    response = httpx2.get(f"{base_url}/runs/00000000-0000-0000-0000-000000000000")
+
+    assert response.status_code == 404

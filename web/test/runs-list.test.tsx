@@ -17,6 +17,7 @@ function run(n: number, overrides: Partial<Run> = {}): Run {
     tokens: 0,
     duration_seconds: 0.084,
     created_at: `2026-09-28T10:${String(59 - n).padStart(2, "0")}:00+00:00`,
+    source: "scheduler",
     ...overrides,
   };
 }
@@ -106,7 +107,7 @@ describe("RunsList pagination", () => {
 });
 
 describe("RunsList row", () => {
-  it("shows type, provider, executor, status, tokens and duration", async () => {
+  it("shows type, source, provider, executor, status, tokens and duration", async () => {
     const server = fakeServer([
       run(1, {
         type: "pytest",
@@ -115,6 +116,7 @@ describe("RunsList row", () => {
         status: "running",
         tokens: 1234,
         duration_seconds: null,
+        source: "mcp",
       }),
       run(2, { executor: "self_hosted", duration_seconds: 11.8 }),
     ]);
@@ -126,6 +128,8 @@ describe("RunsList row", () => {
     expect(first!.textContent).toContain("gemini");
     expect(first!.textContent).toContain("running");
     expect(first!.textContent).toContain("1,234");
+    expect(first!.textContent).toContain("mcp");
+    expect(second!.textContent).toContain("scheduler");
     // A null executor is a run that is not a check; the server writes "cloud" itself.
     expect(first!.textContent).not.toContain("cloud");
     expect(second!.textContent).toContain("site_check");

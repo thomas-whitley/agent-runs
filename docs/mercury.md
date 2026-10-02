@@ -80,7 +80,7 @@ The public repo ships the image and a sample config in `config/mercury.sample.ya
 
 ## The runs page
 
-`web/` is a Vite, React and TypeScript app compiled to static assets and served by the API at the root. It lists runs with type, provider, executor, status, tokens and duration, newest first, and opening one streams its events live. The interesting part is a `useRunStream` hook that holds an `EventSource`, merges arriving events into existing state by their monotonic id, survives a reconnect with `Last-Event-ID` without duplicating rows, and drives the kill connection button that lets a visitor drop the socket and watch the resume happen. Its scope stops there: no approvals and no chat view, because Telegram owns both.
+`web/` is a Vite, React and TypeScript app compiled to static assets and served by the API at the root. It lists runs with type, source, provider, executor, status, tokens and duration, newest first, and opening one streams its events live. The interesting part is a `useRunStream` hook that holds an `EventSource`, merges arriving events into existing state by their monotonic id, survives a reconnect with `Last-Event-ID` without duplicating rows, and drives the kill connection button that lets a visitor drop the socket and watch the resume happen. Its scope stops there: no approvals and no chat view, because Telegram owns both.
 
 The API serves the bundle rather than nginx. The nginx in the compose file exists only so the two replica test has one port, and the cloud deployment runs the API directly, so serving from nginx would make local and production disagree about the one thing the page demonstrates. API routes take precedence and unmatched paths fall through to the page.
 
@@ -90,7 +90,7 @@ The image is built in two stages: a Node stage compiles `web/`, and the Python s
 
 ## What is public
 
-Run metadata (type, provider, executor, status, tokens, duration) is public and shows on the runs page. Event bodies are behind a bearer token. A `public` flag per task type would let a type's runs be posted and shown in full without it, and no type sets it. `pytest` did until 2026-09-30, when a scan showed that a posted pytest file runs as the worker's user and can read the worker's keys from `/proc`, then print them into its own events. The browser never authenticates: it shows metadata for every run, which is why there is no login and no token in any page. Sessions and other clients authenticate with one static bearer token from secrets, rotated by redeploy. Rate limits on the public endpoints are unchanged.
+Run metadata (type, source, provider, executor, status, tokens, duration) is public and shows on the runs page. Event bodies are behind a bearer token. A `public` flag per task type would let a type's runs be posted and shown in full without it, and no type sets it. `pytest` did until 2026-09-30, when a scan showed that a posted pytest file runs as the worker's user and can read the worker's keys from `/proc`, then print them into its own events. The browser never authenticates: it shows metadata for every run, which is why there is no login and no token in any page. Sessions and other clients authenticate with one static bearer token from secrets, rotated by redeploy. Rate limits on the public endpoints are unchanged.
 
 ## Observability
 

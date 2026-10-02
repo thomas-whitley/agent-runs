@@ -56,7 +56,16 @@ build 1 to 4 in its order, starting with one approval gate at run creation for e
 now returns 201 `awaiting_approval` and sends the same Approve question as chat. A
 repo outside `portfolio.repos` is 422, and no bot token or chat id is 503 with no
 run left. The MCP server and n8n should create chores through this, not their own
-path. 408 tests pass. Not deployed. Next is item 2, the `source` column.
+path. 408 tests pass. Not deployed.
+
+**Item 2 is done.** `runs.source` (migration 012, default `api`, checked against
+`telegram`, `mcp`, `n8n`, `api`, `scheduler`). A POST may name `api`, `n8n` or
+`scheduler` (`PostedSource` in `app/run_request.py`); `telegram` and `mcp` are
+422 there. The scheduler now posts `source: scheduler`, and Open it anyway writes
+`telegram`. `GET /runs/{id}` is new, with the list's fields, which the MCP
+`get_run` tool can reuse. The runs page has a Source column. 419 Python and 13
+web tests pass. Not deployed. Next is item 3, the MCP server, after adding 5f and
+5g to `docs/mercury.md` and the brief.
 
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
 `docker.service` both disabled and inactive), so the checks worker was down and the
