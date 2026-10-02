@@ -51,6 +51,7 @@ Every run records its `source`, the thing that asked for it, which is `telegram`
 | A Telegram message opens a PR on a named repo | `tests/test_repo_chore_github.py`, against the real `thomas-whitley/mercury-fixture` | green when run with a GitHub token, output below. CI has no token, so it skips there |
 | A dropped browser stream resumes from the last event without duplicating rows | `web/test/run-stream.test.tsx` against a fake `EventSource`, `tests/test_events_without_token.py`, and the live page below | green |
 | Two task types run on two providers in one deploy | `tests/test_tasks.py::test_chat_runs_on_ollama_and_the_rest_on_gemini`, `tests/test_fallback.py`, and the live run rows below | green |
+| Claude Code queues and reads Mercury runs through its MCP server, and cannot approve them | `tests/test_mcp.py`, and the run Claude Code created on the live deploy below | green |
 
 ## Resume, and the test that proves it
 
@@ -497,6 +498,12 @@ claude mcp add --transport http mercury <api url>/mcp --header "Authorization: B
 ```
 
 The claude.ai connector UI wants OAuth, which this server does not do.
+
+On 2026-10-02 the server was added to Claude Code that way against the live deploy of `4311534`, where `claude mcp list` showed it connected. Asked to queue a pytest run through `create_run`, Claude Code created it, and the live `GET /runs/{id}` reads:
+
+```
+{"id":"fbca4bdd-b585-44a7-8777-cf93f6762e5f","type":"pytest","provider":"gemini","executor":null,"status":"succeeded","tokens":122,"duration_seconds":5.974582,"created_at":"2026-10-02T08:11:49.048336+00:00","source":"mcp"}
+```
 
 ```
 tests/test_mcp.py::test_the_tools_are_the_six_and_none_of_them_approves PASSED

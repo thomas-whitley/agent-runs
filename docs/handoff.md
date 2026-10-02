@@ -73,9 +73,11 @@ web tests pass. Not deployed. Next is item 3, the MCP server, after adding 5f an
 `status_text` and `cancel_by_prefix` in `app/telegram_webhook.py` are shared with
 the tools. A refusal must be raised as the SDK's `ToolError`, because any other
 exception's text is hidden from the client. `tests/test_mcp.py` has 9 tests, and
-428 pass in all. **Still to do for the claim:** deploy (bump `PUBLIC_SHA`), add the
-server to Claude Code with the bearer token, create one run from Claude Code against
-the live API, and paste the `source: mcp` row under a new claims row.
+428 pass in all. It is live: `PUBLIC_SHA` is `4311534` (`mercury-config` commit `4330368`, Deploy
+green), and the claim is green with run `fbca4bdd`, created from Claude Code. The
+server is registered in Claude Code at user scope as `mercury`, with the bearer
+token in its header. **Next is item 4, n8n.** `n8n/compose.yml` (n8n 2.41.6, bound
+to 127.0.0.1:5678) is written and running here, the workflow is not.
 
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
 `docker.service` both disabled and inactive), so the checks worker was down and the
