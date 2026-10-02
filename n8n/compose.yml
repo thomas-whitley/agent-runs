@@ -1,0 +1,25 @@
+# n8n, self hosted on the home PC beside the checks worker. Nothing of it is
+# in Azure. It runs one workflow, issue-to-chore.json, which polls GitHub, so
+# it needs no public address. See n8n/README.md.
+#
+#   docker compose -f n8n/compose.yml up -d
+#
+# The editor is on http://localhost:5678, bound to this machine only. Its
+# credentials (the Mercury bearer token and a GitHub token) live in n8n's own
+# encrypted store in the n8n_data volume, never in this repo.
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.41.6
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      GENERIC_TIMEZONE: Australia/Melbourne
+      TZ: Australia/Melbourne
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:

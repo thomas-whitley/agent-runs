@@ -1,0 +1,433 @@
+{
+  "name": "Mercury: issue to chore",
+  "nodes": [
+    {
+      "id": "45262921-233d-50f1-9aa7-92bd57b79518",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "50a0fe91-f75f-583e-9396-f458cb4846b4",
+      "name": "Labelled issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        250,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/thomas-whitley/mercury-fixture/issues?labels=mercury&state=open&per_page=50",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "githubFixture01",
+          "name": "GitHub mercury-fixture"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "b8f0079d-b83c-56da-bce2-1fc2801a5af7",
+      "name": "New issues",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Static data persists between production runs, so an issue already handed\n// to Mercury is not posted again while its chore waits for approval.\nconst state = $getWorkflowStaticData('global');\nstate.tracked = state.tracked || {};\nconst out = [];\n$input.all().forEach((item, i) => {\n  const issue = item.json;\n  if (!issue.number || issue.pull_request || state.tracked[issue.number]) return;\n  const task = `${issue.title}\\n\\n${issue.body || ''}`.trim();\n  out.push({ json: { number: issue.number, task }, pairedItem: i });\n});\nreturn out;"
+      }
+    },
+    {
+      "id": "895a0403-8358-577d-80de-b9745e8227fa",
+      "name": "Ask Mercury",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        750,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io/runs",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'repo_chore', inputs: { task: $json.task, repo: 'thomas-whitley/mercury-fixture' }, source: 'n8n' }) }}"
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "mercuryBearer01",
+          "name": "Mercury bearer token"
+        }
+      }
+    },
+    {
+      "id": "106bb352-021d-512e-a3c3-291ce24cc0c5",
+      "name": "Track",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const state = $getWorkflowStaticData('global');\nstate.tracked = state.tracked || {};\nconst issues = $('New issues').all();\nreturn $input.all().map((item, i) => {\n  state.tracked[issues[i].json.number] = item.json.id;\n  return { json: { number: issues[i].json.number, run_id: item.json.id, status: item.json.status }, pairedItem: i };\n});"
+      }
+    },
+    {
+      "id": "bb711731-fd53-501a-92d1-d5b47450e02c",
+      "name": "Tracked runs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        450
+      ],
+      "parameters": {
+        "jsCode": "const tracked = $getWorkflowStaticData('global').tracked || {};\nreturn Object.entries(tracked).map(([number, run_id]) => ({ json: { number: Number(number), run_id } }));"
+      }
+    },
+    {
+      "id": "db458f4b-a562-5f02-b2cf-9dadae5f4ba9",
+      "name": "Read run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        450
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io/runs/{{ $json.run_id }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "d3a8b85d-1cff-5a91-b052-c16b1d2dd535",
+      "name": "Finished",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        450
+      ],
+      "parameters": {
+        "jsCode": "// GET /runs/{id} gives duration_seconds only once the run has finished.\nconst tracked = $('Tracked runs').all();\nconst out = [];\n$input.all().forEach((item, i) => {\n  if (item.json.duration_seconds === null || item.json.duration_seconds === undefined) return;\n  out.push({ json: { ...tracked[i].json, status: item.json.status }, pairedItem: i });\n});\nreturn out;"
+      }
+    },
+    {
+      "id": "55a136dd-b26c-5df7-87e9-1ea4d9501de1",
+      "name": "Run events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        450
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://agent-runs-api.grayriver-8b441372.australiaeast.azurecontainerapps.io/runs/{{ $json.run_id }}/events",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          }
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth"
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "mercuryBearer01",
+          "name": "Mercury bearer token"
+        }
+      }
+    },
+    {
+      "id": "dd3308ca-ac80-5b1d-bfd8-eab2cf666eb9",
+      "name": "Comment text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        450
+      ],
+      "parameters": {
+        "jsCode": "// The stream of a finished run closes after its done event, whose output\n// carries pr_url on success and reason otherwise (app/repo_chore.py).\nconst finished = $('Finished').all();\nreturn $input.all().map((item, i) => {\n  const run = finished[i].json;\n  let done = {};\n  for (const line of String(item.json.data || '').split('\\n')) {\n    if (!line.startsWith('data: ')) continue;\n    try { const event = JSON.parse(line.slice(6)); if (event.kind === 'done') done = event.output || {}; } catch (e) {}\n  }\n  const id = run.run_id.slice(0, 8);\n  const body = done.pr_url\n    ? `Mercury run ${id} opened ${done.pr_url}`\n    : `Mercury run ${id} ended ${run.status}${done.reason ? `: ${done.reason}` : '.'} No pull request was opened.`;\n  return { json: { number: run.number, run_id: run.run_id, body }, pairedItem: i };\n});"
+      }
+    },
+    {
+      "id": "0c951658-bdfa-548a-8a4b-7eba80049729",
+      "name": "Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        450
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/thomas-whitley/mercury-fixture/issues/{{ $json.number }}/comments",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ body: $json.body }) }}"
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "githubFixture01",
+          "name": "GitHub mercury-fixture"
+        }
+      }
+    },
+    {
+      "id": "a88685a8-7be0-508b-b895-4fbad497d055",
+      "name": "Remove label",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1750,
+        450
+      ],
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://api.github.com/repos/thomas-whitley/mercury-fixture/issues/{{ $('Comment text').item.json.number }}/labels/mercury",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "githubFixture01",
+          "name": "GitHub mercury-fixture"
+        }
+      }
+    },
+    {
+      "id": "12a0a43a-3ba4-5715-a16c-6d2b044dcc3e",
+      "name": "Untrack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        450
+      ],
+      "parameters": {
+        "jsCode": "const state = $getWorkflowStaticData('global');\nfor (const item of $('Comment text').all()) delete (state.tracked || {})[item.json.number];\nreturn $('Comment text').all().map((item, i) => ({ json: item.json, pairedItem: i }));"
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Labelled issues",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tracked runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Labelled issues": {
+      "main": [
+        [
+          {
+            "node": "New issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New issues": {
+      "main": [
+        [
+          {
+            "node": "Ask Mercury",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Mercury": {
+      "main": [
+        [
+          {
+            "node": "Track",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tracked runs": {
+      "main": [
+        [
+          {
+            "node": "Read run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read run": {
+      "main": [
+        [
+          {
+            "node": "Finished",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finished": {
+      "main": [
+        [
+          {
+            "node": "Run events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run events": {
+      "main": [
+        [
+          {
+            "node": "Comment text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comment text": {
+      "main": [
+        [
+          {
+            "node": "Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comment": {
+      "main": [
+        [
+          {
+            "node": "Remove label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove label": {
+      "main": [
+        [
+          {
+            "node": "Untrack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Australia/Melbourne"
+  },
+  "active": false,
+  "id": "mercuryIssueChore",
+  "pinData": {}
+}
