@@ -52,6 +52,7 @@ Every run records its `source`, the thing that asked for it, which is `telegram`
 | A dropped browser stream resumes from the last event without duplicating rows | `web/test/run-stream.test.tsx` against a fake `EventSource`, `tests/test_events_without_token.py`, and the live page below | green |
 | Two task types run on two providers in one deploy | `tests/test_tasks.py::test_chat_runs_on_ollama_and_the_rest_on_gemini`, `tests/test_fallback.py`, and the live run rows below | green |
 | Claude Code queues and reads Mercury runs through its MCP server, and cannot approve them | `tests/test_mcp.py`, and the run Claude Code created on the live deploy below | green |
+| An n8n workflow turns a labelled GitHub issue into an approved pull request | [`n8n/README.md`](n8n/README.md#the-first-run): [issue #3](https://github.com/thomas-whitley/mercury-fixture/issues/3), run `100c1125-a731-4a16-a3a3-3edfa1e8aad7`, [PR #4](https://github.com/thomas-whitley/mercury-fixture/pull/4) and [the comment back](https://github.com/thomas-whitley/mercury-fixture/issues/3#issuecomment-5949824947). The approval was sent from a shell because Telegram's apps were down | green on the live deploy, not in CI |
 
 ## Resume, and the test that proves it
 

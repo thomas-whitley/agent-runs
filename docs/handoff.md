@@ -1,4 +1,4 @@
-# Handoff: step 5 and Ollama live, 5f and 5g next (2026-10-02)
+# Handoff: 5f and 5g live, rename (6d) next (2026-10-02)
 
 ## Where things stand
 
@@ -78,6 +78,15 @@ green), and the claim is green with run `fbca4bdd`, created from Claude Code. Th
 server is registered in Claude Code at user scope as `mercury`, with the bearer
 token in its header. **Next is item 4, n8n.** `n8n/compose.yml` (n8n 2.41.6, bound
 to 127.0.0.1:5678) is written and running here, the workflow is not.
+
+**Item 4 is done (n8n, step 5g).** `n8n/issue-to-chore.json` runs in `n8n/compose.yml`
+on this PC and polls fixture issues labelled `mercury` every 15 minutes. Issue #3
+became run `100c1125` (`source: n8n`) at 08:30, the approval went in from a shell at
+09:46 because Telegram's apps could not connect, PR #4 opened at 09:47, and the
+10:00 tick commented on the issue and removed the label. The README claim is green on
+the live deploy, not in CI; `n8n/README.md` has the story. n8n's two credentials exist
+only in the `n8n_data` volume. **Next is step 6d, the rename to `mercury`**, which the
+user approved starting; ask before each outward step.
 
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
 `docker.service` both disabled and inactive), so the checks worker was down and the
