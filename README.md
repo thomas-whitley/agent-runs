@@ -1,4 +1,6 @@
-# agent-runs
+# Mercury
+
+This repo was called `agent-runs` until 2026-10-02. The Azure resources keep that name, so the live URL did not change.
 
 A FastAPI agent loop that streams its steps over SSE and resumes from the last event after a dropped connection. Run state lives in PostgreSQL, so more than one replica serves the same run. Deployed to Azure Container Apps at scale to zero by GitHub Actions.
 

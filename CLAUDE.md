@@ -1,4 +1,4 @@
-# agent-runs
+# Mercury
 
 A FastAPI agent loop that streams its steps over SSE and resumes after a dropped connection, with run state in PostgreSQL so more than one replica serves one run. Deployed to Azure Container Apps by GitHub Actions. The design is `docs/design.md`. Read it before doing anything.
 

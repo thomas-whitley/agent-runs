@@ -22,7 +22,7 @@ env:
   # Bumped by hand, never a branch or latest. A full commit SHA from the public
   # repo whose Publish workflow has pushed the matching image tag.
   PUBLIC_SHA: 903d86ca91957ae5a40cc7b30e4035d26e6b169c
-  PUBLIC_REPO: thomas-whitley/agent-runs
+  PUBLIC_REPO: thomas-whitley/mercury
   RESOURCE_GROUP: agent-runs
 
 jobs:

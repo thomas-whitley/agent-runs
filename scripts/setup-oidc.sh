@@ -7,7 +7,7 @@
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-agent-runs-deploy}"
-REPO="${REPO:-thomas-whitley/agent-runs}"
+REPO="${REPO:-thomas-whitley/mercury}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-agent-runs}"
 LOCATION="${LOCATION:-australiaeast}"
 

@@ -1,6 +1,6 @@
 # mercury-config
 
-Private. Holds the real `mercury.yaml` for the one deployment of the public `thomas-whitley/agent-runs` image, and the workflow that deploys it. The public repo ships the image and a sample config. This repo is the only place the chat ID, the repo list and the site list live.
+Private. Holds the real `mercury.yaml` for the one deployment of the public `thomas-whitley/mercury` image, and the workflow that deploys it. The public repo ships the image and a sample config. This repo is the only place the chat ID, the repo list and the site list live.
 
 ## Layout
 
