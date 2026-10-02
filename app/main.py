@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     configure_logging()
-    app = FastAPI(title="agent-runs", lifespan=lifespan)
+    app = FastAPI(title="Mercury", lifespan=lifespan)
 
     @app.middleware("http")
     async def name_the_replica(request: Request, call_next):

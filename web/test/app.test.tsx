@@ -7,6 +7,6 @@ describe("App", () => {
   it("renders the page title", () => {
     const html = renderToString(<App />);
 
-    expect(html).toContain("<h1>agent-runs</h1>");
+    expect(html).toContain("<h1>Mercury</h1>");
   });
 });

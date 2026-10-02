@@ -23,7 +23,7 @@ export function App() {
 
   return (
     <main>
-      <h1>agent-runs</h1>
+      <h1>Mercury</h1>
       {runId === null ? (
         <>
           <p className="lede">

@@ -3,7 +3,7 @@
 import httpx2
 import pytest
 
-INDEX = "<!doctype html><title>agent-runs</title><div id=root></div>"
+INDEX = "<!doctype html><title>Mercury</title><div id=root></div>"
 
 
 @pytest.fixture
@@ -75,3 +75,9 @@ def test_the_page_is_revalidated_on_every_load(web_dist, start_server):
     for path in ("/", "/runs-page"):
         response = httpx2.get(f"{base_url}{path}")
         assert response.headers["cache-control"] == "no-cache"
+
+
+def test_the_api_is_titled_mercury():
+    from app.main import create_app
+
+    assert create_app().title == "Mercury"
