@@ -94,8 +94,9 @@ rename` on 2026-10-02, commit `3adae98` published `ghcr.io/thomas-whitley/mercur
 `PUBLIC_REPO` and `PUBLIC_SHA` to it and renamed the portfolio entry. Deploy was
 green, and both `agent-runs-api` and `agent-runs-scheduler` run the `mercury` image;
 `/health` is ok and the MCP `status` tool answers. Azure names stay `agent-runs-*`.
-Still named `agent-runs`: the web page's title and `<h1>`, the FastAPI title, the
-`pyproject` name and the local directory `~/projects/agent-runs`. The old GHCR
+The runs page and the FastAPI title say Mercury since `bde2233` (`mercury-config`
+`a5fe94f`, Deploy green, live). Still named `agent-runs`: the `pyproject` name and
+the local directory `~/projects/agent-runs`. The old GHCR
 package `agent-runs` still exists and can be deleted once no revision uses it.
 
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
