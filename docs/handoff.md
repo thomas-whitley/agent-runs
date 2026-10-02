@@ -51,6 +51,13 @@ The next work comes from `job-hunt/publish/mercury/next-message-2026-10-02.md`
 build 1 to 4 in its order, starting with one approval gate at run creation for every
 `repo_chore` source.
 
+**Item 1 is done (`0f7f46e`).** The chore gate is `app/chores.py` (`find_repo`,
+`request_chore`). `POST /runs` with `{"type": "repo_chore", "inputs": {"task", "repo"}}`
+now returns 201 `awaiting_approval` and sends the same Approve question as chat. A
+repo outside `portfolio.repos` is 422, and no bot token or chat id is 503 with no
+run left. The MCP server and n8n should create chores through this, not their own
+path. 408 tests pass. Not deployed. Next is item 2, the `source` column.
+
 Docker on this laptop was found fully disabled on 2026-10-02 (`docker.socket` and
 `docker.service` both disabled and inactive), so the checks worker was down and the
 compose database unavailable. `sudo systemctl enable --now docker.socket
